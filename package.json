@@ -6,6 +6,7 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "pdfjs-dist": "latest",
     "vite": "latest",
     "react": "latest",
     "react-dom": "latest"

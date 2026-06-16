@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 const STORAGE_KEY = 'music-assessment-helper-state';
 const tabs = ['기준표', '학생 목록', '채점', 'AI 보조', '결과', '설정'];
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const makeId = () => crypto.randomUUID();
 
@@ -112,6 +116,21 @@ function parseStudentLines(text) {
     .filter((student) => student.className && student.number && student.name);
 }
 
+async function extractTextFromPdf(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pageTexts = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const text = content.items.map((item) => item.str).join(' ');
+    pageTexts.push(text);
+  }
+
+  return pageTexts.join('\n\n').trim();
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState('기준표');
   const [rubric, setRubric] = useState(defaultRubric);
@@ -129,6 +148,9 @@ function App() {
   const [apiKey, setApiKey] = useState('');
   const [apiModel, setApiModel] = useState('gpt-4o-mini');
   const [studentWorkText, setStudentWorkText] = useState('');
+  const [pdfFileName, setPdfFileName] = useState('');
+  const [pdfExtractStatus, setPdfExtractStatus] = useState('');
+  const [pdfExtracting, setPdfExtracting] = useState(false);
   const [aiSuggestions, setAiSuggestions] = useState([]);
   const [aiFeedbackDraft, setAiFeedbackDraft] = useState('');
   const [aiSummary, setAiSummary] = useState('');
@@ -357,6 +379,8 @@ function App() {
     setAiSuggestions(existing?.aiSuggestions ?? []);
     setAiFeedbackDraft(existing?.aiFeedbackDraft ?? '');
     setAiSummary(existing?.aiSummary ?? '');
+    setPdfFileName('');
+    setPdfExtractStatus('');
     setActiveTab('채점');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -611,6 +635,30 @@ function App() {
     if (studentKey(student) === key) {
       setScores({});
       setTeacherMemo('');
+    }
+  };
+
+  const handlePdfUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setPdfFileName(file.name);
+    setPdfExtractStatus('PDF 텍스트를 추출하는 중입니다.');
+    setPdfExtracting(true);
+
+    try {
+      const extractedText = await extractTextFromPdf(file);
+      if (!extractedText) {
+        throw new Error('No text extracted');
+      }
+
+      setStudentWorkText(extractedText);
+      setPdfExtractStatus('PDF 텍스트를 학생 작품 입력창에 넣었습니다.');
+    } catch {
+      setPdfExtractStatus('텍스트 추출 실패, 직접 복사해 넣어주세요.');
+    } finally {
+      setPdfExtracting(false);
+      event.target.value = '';
     }
   };
 
@@ -1128,6 +1176,23 @@ function App() {
             <div className="student-mini">
               <strong>{student.name ? `${student.className}반 ${student.number}번 ${student.name}` : '학생을 선택해 주세요.'}</strong>
               <span>{rubric.title}</span>
+            </div>
+
+            <div className="pdf-upload-box">
+              <div>
+                <strong>PDF 파일 업로드</strong>
+                <span>학생 작품 PDF를 선택하면 텍스트를 추출해 아래 입력창에 넣습니다.</span>
+              </div>
+              <label className="file-button">
+                PDF 선택
+                <input type="file" accept="application/pdf,.pdf" onChange={handlePdfUpload} disabled={pdfExtracting} />
+              </label>
+              {(pdfFileName || pdfExtractStatus) && (
+                <p className={pdfExtractStatus.startsWith('텍스트 추출 실패') ? 'pdf-status error' : 'pdf-status'}>
+                  {pdfFileName && `${pdfFileName} - `}
+                  {pdfExtractStatus}
+                </p>
+              )}
             </div>
 
             <label className="field">

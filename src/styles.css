@@ -429,6 +429,59 @@ textarea:focus {
   font-size: 0.9rem;
 }
 
+.pdf-upload-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px dashed #b9c9d6;
+  border-radius: 8px;
+  background: #f5f9fb;
+}
+
+.pdf-upload-box strong,
+.pdf-upload-box span {
+  display: block;
+}
+
+.pdf-upload-box span {
+  margin-top: 4px;
+  color: #667585;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.file-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border-radius: 6px;
+  background: #24506f;
+  color: #ffffff;
+  font-weight: 900;
+  padding: 0 16px;
+  cursor: pointer;
+}
+
+.file-button input {
+  display: none;
+}
+
+.pdf-status {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #24506f;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.pdf-status.error {
+  color: #9b3e25;
+}
+
 .ai-actions {
   display: flex;
   flex-wrap: wrap;
@@ -940,6 +993,10 @@ textarea:focus {
   }
 
   .ai-result-card {
+    grid-template-columns: 1fr;
+  }
+
+  .pdf-upload-box {
     grid-template-columns: 1fr;
   }
 
