@@ -246,6 +246,10 @@ function App() {
   const [googleAccessToken, setGoogleAccessToken] = useState('');
   const [googleTokenExpiresAt, setGoogleTokenExpiresAt] = useState(0);
   const [googleUser, setGoogleUser] = useState(null);
+  const [googleCourses, setGoogleCourses] = useState([]);
+  const [selectedGoogleCourseId, setSelectedGoogleCourseId] = useState('');
+  const [googleCoursesStatus, setGoogleCoursesStatus] = useState('');
+  const [googleCoursesLoading, setGoogleCoursesLoading] = useState(false);
   const [googleAuthStatus, setGoogleAuthStatus] = useState('');
   const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
   const [studentWorkText, setStudentWorkText] = useState('');
@@ -281,6 +285,8 @@ function App() {
     setApiKey(saved.apiKey ?? '');
     setApiModel(saved.apiModel ?? 'gpt-4o-mini');
     setGoogleClientId(saved.googleClientId ?? '');
+    setGoogleCourses(saved.googleCourses ?? []);
+    setSelectedGoogleCourseId(saved.selectedGoogleCourseId ?? '');
     setStudentWorkText(saved.studentWorkText ?? '');
     setStudentImageMap(saved.studentImageMap ?? {});
     setUnmatchedImageFiles(saved.unmatchedImageFiles ?? []);
@@ -308,6 +314,8 @@ function App() {
         apiKey,
         apiModel,
         googleClientId,
+        googleCourses,
+        selectedGoogleCourseId,
         studentWorkText,
         studentImageMap,
         unmatchedImageFiles,
@@ -332,6 +340,8 @@ function App() {
     apiKey,
     apiModel,
     googleClientId,
+    googleCourses,
+    selectedGoogleCourseId,
     studentWorkText,
     studentImageMap,
     unmatchedImageFiles,
@@ -393,6 +403,9 @@ function App() {
   const currentStudentKey = studentKey(student);
   const currentNormalizedStudentKey = normalizedStudentKey(student);
   const isGoogleConnected = Boolean(googleAccessToken) && Date.now() < googleTokenExpiresAt;
+  const selectedGoogleCourse = useMemo(() => {
+    return googleCourses.find((course) => course.id === selectedGoogleCourseId) ?? null;
+  }, [googleCourses, selectedGoogleCourseId]);
 
   const visibleStudentList = useMemo(() => {
     if (!showUngradedOnly && !hideCompleted) return studentList;
@@ -966,6 +979,64 @@ function App() {
     setGoogleTokenExpiresAt(0);
     setGoogleUser(null);
     setGoogleAuthStatus('구글 연결을 해제했습니다.');
+  };
+
+  const loadGoogleClassroomCourses = async () => {
+    if (!isGoogleConnected) {
+      setGoogleCoursesStatus('먼저 Google Classroom을 연결해 주세요.');
+      return;
+    }
+
+    setGoogleCoursesLoading(true);
+    setGoogleCoursesStatus('내가 교사인 수업 목록을 불러오는 중입니다.');
+
+    try {
+      const courses = [];
+      let pageToken = '';
+
+      do {
+        const params = new URLSearchParams({
+          teacherId: 'me',
+          pageSize: '100',
+          courseStates: 'ACTIVE',
+        });
+        if (pageToken) params.set('pageToken', pageToken);
+
+        const response = await fetch(`https://classroom.googleapis.com/v1/courses?${params.toString()}`, {
+          headers: {
+            Authorization: `Bearer ${googleAccessToken}`,
+          },
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error?.message ?? '수업 목록을 불러오지 못했습니다.');
+        }
+
+        courses.push(
+          ...(data.courses ?? []).map((course) => ({
+            id: course.id,
+            name: course.name ?? '제목 없는 수업',
+            section: course.section ?? '',
+            courseState: course.courseState ?? '',
+          }))
+        );
+        pageToken = data.nextPageToken ?? '';
+      } while (pageToken);
+
+      setGoogleCourses(courses);
+      setSelectedGoogleCourseId((current) => {
+        if (courses.some((course) => course.id === current)) return current;
+        return courses[0]?.id ?? '';
+      });
+      setGoogleCoursesStatus(
+        courses.length > 0 ? `${courses.length}개의 수업을 불러왔습니다.` : '교사로 등록된 활성 수업이 없습니다.'
+      );
+    } catch (error) {
+      setGoogleCoursesStatus(error.message || '수업 목록을 불러오는 중 오류가 발생했습니다.');
+    } finally {
+      setGoogleCoursesLoading(false);
+    }
   };
 
   const runAiAssessment = async () => {
@@ -1789,6 +1860,48 @@ function App() {
             )}
 
             {googleAuthStatus && <p className="pdf-status">{googleAuthStatus}</p>}
+
+            <div className="classroom-course-box">
+              <div>
+                <strong>연결 상태</strong>
+                <span>
+                  {isGoogleConnected ? 'Google Classroom 연결됨' : 'Google Classroom 미연결'}
+                  {selectedGoogleCourse ? ` · ${selectedGoogleCourse.name}` : ''}
+                </span>
+              </div>
+              <button
+                className="secondary-button"
+                onClick={loadGoogleClassroomCourses}
+                disabled={!isGoogleConnected || googleCoursesLoading}
+              >
+                {googleCoursesLoading ? '불러오는 중' : '수업 목록 불러오기'}
+              </button>
+            </div>
+
+            <label className="field">
+              <span>수업 선택</span>
+              <select
+                value={selectedGoogleCourseId}
+                onChange={(event) => setSelectedGoogleCourseId(event.target.value)}
+                disabled={googleCourses.length === 0}
+              >
+                <option value="">수업을 선택해 주세요</option>
+                {googleCourses.map((course) => (
+                  <option key={course.id} value={course.id}>
+                    {course.section ? `${course.name} (${course.section})` : course.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {selectedGoogleCourse && (
+              <div className="selected-course-card">
+                <strong>{selectedGoogleCourse.name}</strong>
+                <span>courseId: {selectedGoogleCourse.id}</span>
+              </div>
+            )}
+
+            {googleCoursesStatus && <p className="pdf-status">{googleCoursesStatus}</p>}
 
             <div className="action-row">
               <button className="secondary-button" onClick={disconnectGoogleClassroom} disabled={!googleAccessToken}>

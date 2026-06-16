@@ -748,6 +748,36 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.classroom-course-box,
+.selected-course-card {
+  border: 1px solid #dce2d5;
+  border-radius: 8px;
+  background: #fbfcfa;
+  padding: 12px;
+}
+
+.classroom-course-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.classroom-course-box strong,
+.classroom-course-box span,
+.selected-course-card strong,
+.selected-course-card span {
+  display: block;
+}
+
+.classroom-course-box span,
+.selected-course-card span {
+  margin-top: 4px;
+  color: #667585;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
 .student-list-panel {
   position: sticky;
   top: 16px;
@@ -1159,6 +1189,11 @@ textarea:focus {
 
   .load-row,
   .action-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .classroom-course-box {
     align-items: stretch;
     flex-direction: column;
   }
