@@ -4,6 +4,13 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 const STORAGE_KEY = 'music-assessment-helper-state';
 const tabs = ['기준표', '학생 목록', '채점', 'AI 보조', '결과', '설정'];
+const GOOGLE_IDENTITY_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
+const GOOGLE_CLASSROOM_LOGIN_SCOPE = [
+  'openid',
+  'email',
+  'profile',
+  'https://www.googleapis.com/auth/classroom.courses.readonly',
+].join(' ');
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -98,6 +105,30 @@ function getResponseText(data) {
     ?.map((item) => item.text ?? '')
     ?.join('');
   return content || '';
+}
+
+function loadGoogleIdentityScript() {
+  return new Promise((resolve, reject) => {
+    if (window.google?.accounts?.oauth2) {
+      resolve();
+      return;
+    }
+
+    const existingScript = document.querySelector(`script[src="${GOOGLE_IDENTITY_SCRIPT_URL}"]`);
+    if (existingScript) {
+      existingScript.addEventListener('load', resolve, { once: true });
+      existingScript.addEventListener('error', reject, { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = GOOGLE_IDENTITY_SCRIPT_URL;
+    script.async = true;
+    script.defer = true;
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
 }
 
 function studentKey(student) {
@@ -211,6 +242,12 @@ function App() {
   const [hideCompleted, setHideCompleted] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [apiModel, setApiModel] = useState('gpt-4o-mini');
+  const [googleClientId, setGoogleClientId] = useState('');
+  const [googleAccessToken, setGoogleAccessToken] = useState('');
+  const [googleTokenExpiresAt, setGoogleTokenExpiresAt] = useState(0);
+  const [googleUser, setGoogleUser] = useState(null);
+  const [googleAuthStatus, setGoogleAuthStatus] = useState('');
+  const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
   const [studentWorkText, setStudentWorkText] = useState('');
   const [pdfFileName, setPdfFileName] = useState('');
   const [pdfExtractStatus, setPdfExtractStatus] = useState('');
@@ -243,6 +280,7 @@ function App() {
     setHideCompleted(saved.hideCompleted ?? false);
     setApiKey(saved.apiKey ?? '');
     setApiModel(saved.apiModel ?? 'gpt-4o-mini');
+    setGoogleClientId(saved.googleClientId ?? '');
     setStudentWorkText(saved.studentWorkText ?? '');
     setStudentImageMap(saved.studentImageMap ?? {});
     setUnmatchedImageFiles(saved.unmatchedImageFiles ?? []);
@@ -269,6 +307,7 @@ function App() {
         hideCompleted,
         apiKey,
         apiModel,
+        googleClientId,
         studentWorkText,
         studentImageMap,
         unmatchedImageFiles,
@@ -292,6 +331,7 @@ function App() {
     hideCompleted,
     apiKey,
     apiModel,
+    googleClientId,
     studentWorkText,
     studentImageMap,
     unmatchedImageFiles,
@@ -352,6 +392,7 @@ function App() {
 
   const currentStudentKey = studentKey(student);
   const currentNormalizedStudentKey = normalizedStudentKey(student);
+  const isGoogleConnected = Boolean(googleAccessToken) && Date.now() < googleTokenExpiresAt;
 
   const visibleStudentList = useMemo(() => {
     if (!showUngradedOnly && !hideCompleted) return studentList;
@@ -854,6 +895,77 @@ function App() {
 
   const clearUnmatchedImageFiles = () => {
     setUnmatchedImageFiles([]);
+  };
+
+  const connectGoogleClassroom = async () => {
+    if (!googleClientId.trim()) {
+      setGoogleAuthStatus('Google Cloud Console에서 발급한 OAuth Client ID를 먼저 입력해 주세요.');
+      return;
+    }
+
+    setGoogleAuthLoading(true);
+    setGoogleAuthStatus('구글 로그인 창을 준비하는 중입니다.');
+
+    try {
+      await loadGoogleIdentityScript();
+
+      const tokenResponse = await new Promise((resolve, reject) => {
+        const tokenClient = window.google.accounts.oauth2.initTokenClient({
+          client_id: googleClientId.trim(),
+          scope: GOOGLE_CLASSROOM_LOGIN_SCOPE,
+          callback: (response) => {
+            if (response.error) {
+              reject(new Error(response.error_description || response.error));
+              return;
+            }
+            resolve(response);
+          },
+        });
+
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+      });
+
+      const expiresInSeconds = Number(tokenResponse.expires_in ?? 3600);
+      setGoogleAccessToken(tokenResponse.access_token);
+      setGoogleTokenExpiresAt(Date.now() + expiresInSeconds * 1000);
+
+      const profileResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: {
+          Authorization: `Bearer ${tokenResponse.access_token}`,
+        },
+      });
+
+      if (profileResponse.ok) {
+        const profile = await profileResponse.json();
+        setGoogleUser({
+          name: profile.name ?? '',
+          email: profile.email ?? '',
+          picture: profile.picture ?? '',
+        });
+      } else {
+        setGoogleUser(null);
+      }
+
+      setGoogleAuthStatus('Google Classroom 접근 권한이 연결되었습니다.');
+    } catch (error) {
+      setGoogleAuthStatus(error.message || '구글 로그인 중 오류가 발생했습니다.');
+      setGoogleAccessToken('');
+      setGoogleTokenExpiresAt(0);
+      setGoogleUser(null);
+    } finally {
+      setGoogleAuthLoading(false);
+    }
+  };
+
+  const disconnectGoogleClassroom = () => {
+    if (googleAccessToken && window.google?.accounts?.oauth2) {
+      window.google.accounts.oauth2.revoke(googleAccessToken, () => {});
+    }
+
+    setGoogleAccessToken('');
+    setGoogleTokenExpiresAt(0);
+    setGoogleUser(null);
+    setGoogleAuthStatus('구글 연결을 해제했습니다.');
   };
 
   const runAiAssessment = async () => {
@@ -1643,6 +1755,57 @@ function App() {
               API Key는 이 브라우저의 localStorage에만 저장됩니다. 공용 기기에서는 사용 후 브라우저 저장 데이터를
               삭제하는 것이 좋습니다.
             </p>
+          </div>
+
+          <div className="settings-section">
+            <div className="panel-heading compact-heading">
+              <div>
+                <p className="eyebrow">Google Classroom</p>
+                <h2>구글 로그인</h2>
+              </div>
+              <span className={isGoogleConnected ? 'done' : 'pending'}>
+                {isGoogleConnected ? '연결됨' : '미연결'}
+              </span>
+            </div>
+
+            <label className="field">
+              <span>Google OAuth Client ID</span>
+              <input
+                value={googleClientId}
+                onChange={(event) => setGoogleClientId(event.target.value)}
+                placeholder="000000000000-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com"
+                autoComplete="off"
+              />
+            </label>
+
+            {googleUser && (
+              <div className="google-user-card">
+                {googleUser.picture && <img src={googleUser.picture} alt="" />}
+                <div>
+                  <strong>{googleUser.name || 'Google 계정'}</strong>
+                  <span>{googleUser.email}</span>
+                </div>
+              </div>
+            )}
+
+            {googleAuthStatus && <p className="pdf-status">{googleAuthStatus}</p>}
+
+            <div className="action-row">
+              <button className="secondary-button" onClick={disconnectGoogleClassroom} disabled={!googleAccessToken}>
+                연결 해제
+              </button>
+              <button className="primary-button" onClick={connectGoogleClassroom} disabled={googleAuthLoading}>
+                {googleAuthLoading ? '연결 중' : 'Google Classroom 연결'}
+              </button>
+            </div>
+
+            <div className="ai-help">
+              <strong>1단계 완료 후 다음 구현</strong>
+              <p>
+                연결이 완료되면 클래스룸 목록, 과제 목록, 제출물, Drive 사진 다운로드 순서로 권한을 확장해 학생과
+                자동 매칭합니다.
+              </p>
+            </div>
           </div>
         </section>
       )}

@@ -707,6 +707,47 @@ textarea:focus {
   max-width: 760px;
 }
 
+.settings-section {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid #edf0ea;
+}
+
+.compact-heading {
+  align-items: center;
+  margin-bottom: 0;
+}
+
+.google-user-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #dce2d5;
+  border-radius: 8px;
+  background: #fbfcfa;
+  padding: 12px;
+}
+
+.google-user-card img {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+}
+
+.google-user-card strong,
+.google-user-card span {
+  display: block;
+}
+
+.google-user-card span {
+  margin-top: 3px;
+  color: #667585;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
 .student-list-panel {
   position: sticky;
   top: 16px;
