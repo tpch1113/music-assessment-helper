@@ -104,6 +104,61 @@ function studentKey(student) {
   return [student.className, student.number, student.name].map((item) => item.trim()).join('|');
 }
 
+function normalizeStudentPart(value) {
+  const text = String(value ?? '').trim();
+  const withoutLeadingZeros = text.replace(/^0+(?=\d)/, '');
+  return withoutLeadingZeros || text;
+}
+
+function normalizedStudentKey(student) {
+  return [
+    normalizeStudentPart(student.className),
+    normalizeStudentPart(student.number),
+    String(student.name ?? '').trim(),
+  ].join('|');
+}
+
+function getBaseFileName(fileName) {
+  return fileName.replace(/\.[^.]+$/g, '').trim();
+}
+
+function parseStudentCandidatesFromFileName(fileName) {
+  const baseName = getBaseFileName(fileName);
+  const candidates = [];
+  const separated = baseName.match(/^(\d+)[-_ ]+(\d+)[-_ ]+(.+)$/);
+
+  if (separated) {
+    candidates.push({
+      className: normalizeStudentPart(separated[1]),
+      number: normalizeStudentPart(separated[2]),
+      name: separated[3].trim(),
+    });
+  }
+
+  const compact = baseName.match(/^(\d{3,4})[-_ ]+(.+)$/);
+  if (compact) {
+    const digits = compact[1];
+    const name = compact[2].trim();
+    const compactCandidates = [
+      { className: digits.slice(0, 1), number: digits.slice(1) },
+      { className: digits.slice(0, -2), number: digits.slice(-2) },
+      { className: digits.slice(0, 2), number: digits.slice(2) },
+    ];
+
+    compactCandidates.forEach((candidate) => {
+      if (candidate.className && candidate.number) {
+        candidates.push({
+          className: normalizeStudentPart(candidate.className),
+          number: normalizeStudentPart(candidate.number),
+          name,
+        });
+      }
+    });
+  }
+
+  return candidates;
+}
+
 function parseStudentLines(text) {
   return text
     .split(/\r?\n/)
@@ -114,6 +169,15 @@ function parseStudentLines(text) {
       return { id: makeId(), className, number, name };
     })
     .filter((student) => student.className && student.number && student.name);
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
 }
 
 async function extractTextFromPdf(file) {
@@ -151,6 +215,10 @@ function App() {
   const [pdfFileName, setPdfFileName] = useState('');
   const [pdfExtractStatus, setPdfExtractStatus] = useState('');
   const [pdfExtracting, setPdfExtracting] = useState(false);
+  const [studentImageMap, setStudentImageMap] = useState({});
+  const [unmatchedImageFiles, setUnmatchedImageFiles] = useState([]);
+  const [uploadedImages, setUploadedImages] = useState([]);
+  const [imageUploadStatus, setImageUploadStatus] = useState('');
   const [aiSuggestions, setAiSuggestions] = useState([]);
   const [aiFeedbackDraft, setAiFeedbackDraft] = useState('');
   const [aiSummary, setAiSummary] = useState('');
@@ -176,6 +244,8 @@ function App() {
     setApiKey(saved.apiKey ?? '');
     setApiModel(saved.apiModel ?? 'gpt-4o-mini');
     setStudentWorkText(saved.studentWorkText ?? '');
+    setStudentImageMap(saved.studentImageMap ?? {});
+    setUnmatchedImageFiles(saved.unmatchedImageFiles ?? []);
     setAiSuggestions(saved.aiSuggestions ?? []);
     setAiFeedbackDraft(saved.aiFeedbackDraft ?? '');
     setAiSummary(saved.aiSummary ?? '');
@@ -200,6 +270,8 @@ function App() {
         apiKey,
         apiModel,
         studentWorkText,
+        studentImageMap,
+        unmatchedImageFiles,
         aiSuggestions,
         aiFeedbackDraft,
         aiSummary,
@@ -221,6 +293,8 @@ function App() {
     apiKey,
     apiModel,
     studentWorkText,
+    studentImageMap,
+    unmatchedImageFiles,
     aiSuggestions,
     aiFeedbackDraft,
     aiSummary,
@@ -277,6 +351,7 @@ function App() {
   }, [results]);
 
   const currentStudentKey = studentKey(student);
+  const currentNormalizedStudentKey = normalizedStudentKey(student);
 
   const visibleStudentList = useMemo(() => {
     if (!showUngradedOnly && !hideCompleted) return studentList;
@@ -368,7 +443,7 @@ function App() {
     setTeacherMemo('');
   };
 
-  const selectStudent = (targetStudent) => {
+  const selectStudent = (targetStudent, targetTab = '채점') => {
     const key = studentKey(targetStudent);
     const existing = resultMap.get(key);
 
@@ -381,7 +456,9 @@ function App() {
     setAiSummary(existing?.aiSummary ?? '');
     setPdfFileName('');
     setPdfExtractStatus('');
-    setActiveTab('채점');
+    setUploadedImages(studentImageMap[normalizedStudentKey(targetStudent)] ?? existing?.uploadedImages ?? []);
+    setImageUploadStatus('');
+    setActiveTab(targetTab);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -429,6 +506,11 @@ function App() {
     setStudentList((current) => current.filter((item) => item.id !== studentId));
     if (removed) {
       setResults((current) => current.filter((result) => result.studentKey !== studentKey(removed)));
+      setStudentImageMap((current) => {
+        const next = { ...current };
+        delete next[normalizedStudentKey(removed)];
+        return next;
+      });
     }
     if (student.id === studentId) resetAssessmentForm();
   };
@@ -612,6 +694,7 @@ function App() {
       teacherMemo,
       feedback,
       studentWorkText,
+      uploadedImages,
       aiSuggestions,
       aiFeedbackDraft,
       aiSummary,
@@ -662,14 +745,125 @@ function App() {
     }
   };
 
+  const handleImageUpload = async (event) => {
+    const files = Array.from(event.target.files ?? []);
+    const imageFiles = files.filter((file) => ['image/jpeg', 'image/png', 'image/webp'].includes(file.type));
+
+    if (imageFiles.length === 0) {
+      setImageUploadStatus('jpg, jpeg, png, webp 이미지 파일만 업로드할 수 있습니다.');
+      event.target.value = '';
+      return;
+    }
+
+    try {
+      const images = await Promise.all(
+        imageFiles.map(async (file) => ({
+          id: makeId(),
+          name: file.name,
+          type: file.type,
+          dataUrl: await readFileAsDataUrl(file),
+        }))
+      );
+
+      setUploadedImages((current) => [...current, ...images]);
+      setImageUploadStatus(`${images.length}장의 이미지를 추가했습니다.`);
+    } catch {
+      setImageUploadStatus('이미지를 불러오지 못했습니다. 다시 시도해 주세요.');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const handleBulkStudentImageUpload = async (event) => {
+    const files = Array.from(event.target.files ?? []);
+    const imageFiles = files.filter((file) => ['image/jpeg', 'image/png', 'image/webp'].includes(file.type));
+
+    if (imageFiles.length === 0) {
+      setImageUploadStatus('jpg, jpeg, png, webp 이미지 파일만 업로드할 수 있습니다.');
+      event.target.value = '';
+      return;
+    }
+
+    const studentIndex = new Map(studentList.map((item) => [normalizedStudentKey(item), item]));
+    const nextMap = { ...studentImageMap };
+    const unmatched = [];
+    let matchedCount = 0;
+
+    try {
+      const imageEntries = await Promise.all(
+        imageFiles.map(async (file) => ({
+          file,
+          image: {
+            id: makeId(),
+            name: file.name,
+            type: file.type,
+            dataUrl: await readFileAsDataUrl(file),
+          },
+        }))
+      );
+
+      imageEntries.forEach(({ file, image }) => {
+        const candidates = parseStudentCandidatesFromFileName(file.name);
+        const matchedCandidate = candidates.find((candidate) => studentIndex.has(normalizedStudentKey(candidate)));
+
+        if (!matchedCandidate) {
+          unmatched.push({
+            id: makeId(),
+            name: file.name,
+            reason: '학생 목록과 일치하는 반, 번호, 이름을 찾지 못했습니다.',
+          });
+          return;
+        }
+
+        const key = normalizedStudentKey(matchedCandidate);
+        nextMap[key] = [...(nextMap[key] ?? []), image];
+        matchedCount += 1;
+      });
+
+      setStudentImageMap(nextMap);
+      setUnmatchedImageFiles((current) => [...current, ...unmatched]);
+      setImageUploadStatus(`${matchedCount}개 파일을 학생과 매칭했습니다. 실패 ${unmatched.length}개.`);
+
+      if (currentNormalizedStudentKey && nextMap[currentNormalizedStudentKey]) {
+        setUploadedImages(nextMap[currentNormalizedStudentKey]);
+      }
+    } catch {
+      setImageUploadStatus('이미지를 불러오지 못했습니다. 다시 시도해 주세요.');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const removeUploadedImage = (imageId) => {
+    setUploadedImages((current) => current.filter((image) => image.id !== imageId));
+    if (currentNormalizedStudentKey) {
+      setStudentImageMap((current) => ({
+        ...current,
+        [currentNormalizedStudentKey]: (current[currentNormalizedStudentKey] ?? []).filter((image) => image.id !== imageId),
+      }));
+    }
+  };
+
+  const clearUploadedImages = () => {
+    setUploadedImages([]);
+    setImageUploadStatus('');
+    if (currentNormalizedStudentKey) {
+      setStudentImageMap((current) => ({ ...current, [currentNormalizedStudentKey]: [] }));
+    }
+  };
+
+  const clearUnmatchedImageFiles = () => {
+    setUnmatchedImageFiles([]);
+  };
+
   const runAiAssessment = async () => {
     if (!apiKey.trim()) {
       setAiError('설정 탭에서 OpenAI API Key를 먼저 입력해 주세요.');
       setActiveTab('설정');
       return;
     }
-    if (!studentWorkText.trim()) {
-      setAiError('학생 작품 텍스트를 입력해 주세요.');
+    if (!studentWorkText.trim() && uploadedImages.length === 0) {
+      setAiError('학생 작품 텍스트를 입력하거나 작품 사진을 업로드해 주세요.');
       return;
     }
 
@@ -701,6 +895,25 @@ function App() {
     };
 
     try {
+      const userContent = [
+        {
+          type: 'input_text',
+          text: JSON.stringify({
+            assessmentTitle: rubric.title,
+            student,
+            rubric: rubricForAi,
+            studentWorkText,
+            uploadedImageCount: uploadedImages.length,
+            instruction:
+              '첨부 이미지가 있으면 사진 속 글과 시각 자료를 학생 작품 내용으로 읽고 평가하라. 단순 OCR 결과만 나열하지 말고, 읽어낸 내용을 현재 평가기준과 비교해 점수와 이유를 판단하라. 텍스트 입력과 이미지가 모두 있으면 둘을 함께 근거로 삼아라. 각 세부 기준마다 추천 점수를 하나 고르고 reason을 한국어로 작성하라. recommendedScore는 해당 기준의 levels 중 하나에 가까운 점수로 제안하라. feedbackDraft는 학생의 강점과 보완점을 포함하되 "~함." 문체로 작성하라.',
+          }),
+        },
+        ...uploadedImages.map((image) => ({
+          type: 'input_image',
+          image_url: image.dataUrl,
+        })),
+      ];
+
       const response = await fetch('https://api.openai.com/v1/responses', {
         method: 'POST',
         headers: {
@@ -713,18 +926,11 @@ function App() {
             {
               role: 'system',
               content:
-                '너는 중학교 음악 수행평가 채점 보조자다. 교사가 만든 평가기준과 학생 작품 텍스트를 비교하여 점수 추천과 이유를 제안한다. 최종 점수는 교사가 결정하므로 단정하지 말고 근거 중심으로 작성한다. 모든 피드백 문장은 생활기록부에 어울리는 "~함." 문체로 쓴다.',
+                '너는 중학교 음악 수행평가 채점 보조자다. 교사가 만든 평가기준과 학생 작품 텍스트 또는 작품 사진을 비교하여 점수 추천과 이유를 제안한다. 사진이 들어오면 OCR처럼 글자만 옮기지 말고, 사진 속 학생 작품 내용을 읽고 이해한 뒤 평가기준에 맞춰 판단한다. 최종 점수는 교사가 결정하므로 단정하지 말고 근거 중심으로 작성한다. 모든 피드백 문장은 생활기록부에 어울리는 "~함." 문체로 쓴다.',
             },
             {
               role: 'user',
-              content: JSON.stringify({
-                assessmentTitle: rubric.title,
-                student,
-                rubric: rubricForAi,
-                studentWorkText,
-                instruction:
-                  '각 세부 기준마다 추천 점수를 하나 고르고 reason을 한국어로 작성하라. recommendedScore는 해당 기준의 levels 중 하나에 가까운 점수로 제안하라. feedbackDraft는 학생의 강점과 보완점을 포함하되 "~함." 문체로 작성하라.',
-              }),
+              content: userContent,
             },
           ],
           text: {
@@ -1010,6 +1216,7 @@ function App() {
           <StudentListPanel
             completedCount={completedCount}
             hideCompleted={hideCompleted}
+            studentImageMap={studentImageMap}
             resultMap={resultMap}
             selectedKey={currentStudentKey}
             showUngradedOnly={showUngradedOnly}
@@ -1028,6 +1235,7 @@ function App() {
           <StudentListPanel
             completedCount={completedCount}
             hideCompleted={hideCompleted}
+            studentImageMap={studentImageMap}
             resultMap={resultMap}
             selectedKey={currentStudentKey}
             showUngradedOnly={showUngradedOnly}
@@ -1178,6 +1386,44 @@ function App() {
               <span>{rubric.title}</span>
             </div>
 
+            <div className="bulk-image-box">
+              <div className="image-upload-head">
+                <div>
+                  <strong>여러 학생 사진 일괄 업로드</strong>
+                  <span>파일명 예: 1-01-김민서.jpg, 1_02_박지훈.png, 3301_이서연.jpg</span>
+                </div>
+                <label className="file-button">
+                  일괄 선택
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                    multiple
+                    onChange={handleBulkStudentImageUpload}
+                  />
+                </label>
+              </div>
+              <p className="bulk-hint">
+                학생 목록에 있는 반, 번호, 이름과 파일명을 비교해 자동 매칭합니다. 번호의 앞자리 0은 자동으로
+                무시합니다.
+              </p>
+              {unmatchedImageFiles.length > 0 && (
+                <div className="unmatched-box">
+                  <div>
+                    <strong>매칭 실패 파일</strong>
+                    <button type="button" onClick={clearUnmatchedImageFiles}>목록 지우기</button>
+                  </div>
+                  <ul>
+                    {unmatchedImageFiles.map((file) => (
+                      <li key={file.id}>
+                        <span>{file.name}</span>
+                        <small>{file.reason}</small>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
             <div className="pdf-upload-box">
               <div>
                 <strong>PDF 파일 업로드</strong>
@@ -1192,6 +1438,47 @@ function App() {
                   {pdfFileName && `${pdfFileName} - `}
                   {pdfExtractStatus}
                 </p>
+              )}
+            </div>
+
+            <div className="image-upload-box">
+              <div className="image-upload-head">
+                <div>
+                  <strong>작품 사진 업로드</strong>
+                  <span>jpg, jpeg, png, webp 파일을 여러 장 선택할 수 있습니다.</span>
+                </div>
+                <label className="file-button">
+                  이미지 선택
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                    multiple
+                    onChange={handleImageUpload}
+                  />
+                </label>
+              </div>
+
+              {imageUploadStatus && <p className="pdf-status">{imageUploadStatus}</p>}
+
+              {uploadedImages.length > 0 && (
+                <>
+                  <div className="image-preview-grid">
+                    {uploadedImages.map((image) => (
+                      <figure className="image-preview-card" key={image.id}>
+                        <img src={image.dataUrl} alt={image.name} />
+                        <figcaption>
+                          <span>{image.name}</span>
+                          <button type="button" onClick={() => removeUploadedImage(image.id)}>
+                            삭제
+                          </button>
+                        </figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                  <button className="subtle-button" type="button" onClick={clearUploadedImages}>
+                    이미지 모두 지우기
+                  </button>
+                </>
               )}
             </div>
 
@@ -1366,6 +1653,7 @@ function App() {
 function StudentListPanel({
   completedCount,
   hideCompleted,
+  studentImageMap,
   resultMap,
   selectedKey,
   showUngradedOnly,
@@ -1427,13 +1715,17 @@ function StudentListPanel({
         ) : (
           studentList.map((item) => {
             const key = studentKey(item);
+            const imageCount = studentImageMap[normalizedStudentKey(item)]?.length ?? 0;
             const completed = resultMap.has(key);
             return (
               <div className={`student-row ${selectedKey === key ? 'selected' : ''}`} key={item.id}>
-                <button onClick={() => onSelect(item)}>
-                  <strong>
-                    {item.className}반 {item.number}번 {item.name}
-                  </strong>
+                <button onClick={() => onSelect(item, imageCount > 0 ? 'AI 보조' : '채점')}>
+                  <span className="student-row-main">
+                    <strong>
+                      {item.className}반 {item.number}번 {item.name}
+                    </strong>
+                    {imageCount > 0 && <em>작품 사진 있음 {imageCount}장</em>}
+                  </span>
                   <span className={completed ? 'done' : 'pending'}>{completed ? '완료' : '미채점'}</span>
                 </button>
                 <button className="danger-button small" onClick={() => onRemove(item.id)}>

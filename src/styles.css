@@ -482,6 +482,141 @@ textarea:focus {
   color: #9b3e25;
 }
 
+.image-upload-box {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid #d8dfd1;
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.bulk-image-box {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid #cbd8c2;
+  border-radius: 8px;
+  background: #eef3e9;
+}
+
+.bulk-hint {
+  margin: 0;
+  color: #52616f;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.unmatched-box {
+  display: grid;
+  gap: 10px;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.unmatched-box > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.unmatched-box button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: #f4ded5;
+  color: #9b3e25;
+  font-weight: 900;
+  padding: 0 10px;
+}
+
+.unmatched-box ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.unmatched-box li {
+  display: grid;
+  gap: 3px;
+  color: #394858;
+}
+
+.unmatched-box small {
+  color: #8a5b46;
+}
+
+.image-upload-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.image-upload-head strong,
+.image-upload-head span {
+  display: block;
+}
+
+.image-upload-head span {
+  margin-top: 4px;
+  color: #667585;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.image-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.image-preview-card {
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid #dce2d5;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.image-preview-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #eef3e9;
+}
+
+.image-preview-card figcaption {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+}
+
+.image-preview-card span {
+  overflow: hidden;
+  color: #394858;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-preview-card button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: #f4ded5;
+  color: #9b3e25;
+  font-weight: 900;
+}
+
 .ai-actions {
   display: flex;
   flex-wrap: wrap;
@@ -691,6 +826,19 @@ textarea:focus {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.student-row-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.student-row-main em {
+  color: #287146;
+  font-size: 0.76rem;
+  font-style: normal;
+  font-weight: 900;
 }
 
 .student-row.selected > button:first-child {
@@ -998,6 +1146,11 @@ textarea:focus {
 
   .pdf-upload-box {
     grid-template-columns: 1fr;
+  }
+
+  .image-upload-head {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .area-header {
