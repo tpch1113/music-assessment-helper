@@ -786,6 +786,29 @@ textarea:focus {
   border-top: 1px solid #edf0ea;
 }
 
+.danger-zone {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid #f0d4ca;
+}
+
+.danger-zone h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.danger-zone span {
+  display: block;
+  margin-top: 6px;
+  color: #8a5b46;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
 .compact-heading {
   align-items: center;
   margin-bottom: 0;
@@ -1422,7 +1445,8 @@ textarea:focus {
 
   .context-grid,
   .spreadsheet-upload-box,
-  .roster-master-box {
+  .roster-master-box,
+  .danger-zone {
     grid-template-columns: 1fr;
   }
 

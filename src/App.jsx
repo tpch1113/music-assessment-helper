@@ -1639,6 +1639,41 @@ function App() {
     setGoogleAuthStatus('구글 연결을 해제했습니다.');
   };
 
+  const resetAllStoredData = () => {
+    const confirmed = window.confirm('모든 학생 명단과 채점 결과가 삭제됩니다. 계속하시겠습니까?');
+    if (!confirmed) return;
+
+    const saved = safeParse(localStorage.getItem(STORAGE_KEY), {});
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        ...saved,
+        masterRosterByClass: {},
+        studentListsByContext: {},
+        resultsByContext: {},
+        studentList: [],
+        results: [],
+        student: emptyStudent,
+        scores: {},
+        teacherMemo: '',
+        googleCourses: [],
+        googleCourseWork: [],
+        googleStudentSubmissions: [],
+        googleSubmissionImages: [],
+        selectedGoogleCourseId: '',
+        selectedGoogleCourseWorkId: '',
+        selectedGoogleSubmissionId: '',
+        studentImageMap: {},
+        unmatchedImageFiles: [],
+        uploadedImages: [],
+        aiSuggestions: [],
+        aiFeedbackDraft: '',
+        aiSummary: '',
+      })
+    );
+    location.reload();
+  };
+
   const loadGoogleClassroomCourses = async () => {
     if (!isGoogleConnected) {
       setGoogleCoursesStatus('먼저 Google Classroom을 연결해 주세요.');
@@ -3203,6 +3238,17 @@ function App() {
                 자동 매칭합니다.
               </p>
             </div>
+          </div>
+
+          <div className="danger-zone">
+            <div>
+              <p className="eyebrow">데이터 관리</p>
+              <h2>전체 데이터 초기화</h2>
+              <span>학생 명단, 채점 결과, 학년/반 캐시, Classroom 조회 데이터를 삭제합니다.</span>
+            </div>
+            <button className="danger-button" type="button" onClick={resetAllStoredData}>
+              전체 데이터 초기화
+            </button>
           </div>
         </section>
       )}
