@@ -13,6 +13,7 @@ const GOOGLE_CLASSROOM_LOGIN_SCOPE = [
   'https://www.googleapis.com/auth/classroom.coursework.students.readonly',
   'https://www.googleapis.com/auth/classroom.rosters.readonly',
   'https://www.googleapis.com/auth/classroom.profile.emails',
+  'https://www.googleapis.com/auth/drive.readonly',
 ].join(' ');
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -104,6 +105,24 @@ function formatSubmissionState(state) {
     RECLAIMED_BY_STUDENT: '학생 회수',
   };
   return labels[state] ?? state ?? '-';
+}
+
+function isSupportedImageFile(file) {
+  const mimeType = String(file?.mimeType ?? '').toLowerCase();
+  const name = String(file?.name ?? file?.title ?? '').toLowerCase();
+  return (
+    ['image/jpeg', 'image/png', 'image/webp'].includes(mimeType) ||
+    /\.(jpe?g|png|webp)$/i.test(name)
+  );
+}
+
+function readBlobAsDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 function clampRecommendation(score, levels) {
@@ -279,6 +298,9 @@ function App() {
   const [selectedGoogleSubmissionId, setSelectedGoogleSubmissionId] = useState('');
   const [googleSubmissionsStatus, setGoogleSubmissionsStatus] = useState('');
   const [googleSubmissionsLoading, setGoogleSubmissionsLoading] = useState(false);
+  const [googleSubmissionImages, setGoogleSubmissionImages] = useState([]);
+  const [googleSubmissionImagesStatus, setGoogleSubmissionImagesStatus] = useState('');
+  const [googleSubmissionImagesLoading, setGoogleSubmissionImagesLoading] = useState(false);
   const [googleAuthStatus, setGoogleAuthStatus] = useState('');
   const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
   const [studentWorkText, setStudentWorkText] = useState('');
@@ -320,6 +342,7 @@ function App() {
     setSelectedGoogleCourseWorkId(saved.selectedGoogleCourseWorkId ?? '');
     setGoogleStudentSubmissions(saved.googleStudentSubmissions ?? []);
     setSelectedGoogleSubmissionId(saved.selectedGoogleSubmissionId ?? '');
+    setGoogleSubmissionImages(saved.googleSubmissionImages ?? []);
     setStudentWorkText(saved.studentWorkText ?? '');
     setStudentImageMap(saved.studentImageMap ?? {});
     setUnmatchedImageFiles(saved.unmatchedImageFiles ?? []);
@@ -353,6 +376,7 @@ function App() {
         selectedGoogleCourseWorkId,
         googleStudentSubmissions,
         selectedGoogleSubmissionId,
+        googleSubmissionImages,
         studentWorkText,
         studentImageMap,
         unmatchedImageFiles,
@@ -383,6 +407,7 @@ function App() {
     selectedGoogleCourseWorkId,
     googleStudentSubmissions,
     selectedGoogleSubmissionId,
+    googleSubmissionImages,
     studentWorkText,
     studentImageMap,
     unmatchedImageFiles,
@@ -453,6 +478,28 @@ function App() {
   const selectedGoogleSubmission = useMemo(() => {
     return googleStudentSubmissions.find((submission) => submission.id === selectedGoogleSubmissionId) ?? null;
   }, [googleStudentSubmissions, selectedGoogleSubmissionId]);
+  const selectedGoogleSubmissionAttachmentDebug = useMemo(() => {
+    const attachments = selectedGoogleSubmission?.raw?.assignmentSubmission?.attachments ?? [];
+    return attachments.map((attachment, index) => {
+      const attachmentType =
+        Object.keys(attachment).find((key) => key !== 'driveFile' && attachment[key]) ??
+        (attachment.driveFile ? 'driveFile' : 'unknown');
+
+      return {
+        index: index + 1,
+        attachmentType,
+        title:
+          attachment.driveFile?.title ??
+          attachment.link?.title ??
+          attachment.form?.title ??
+          attachment.youTubeVideo?.title ??
+          '',
+        mimeType: attachment.driveFile?.mimeType ?? '',
+        driveFileId: attachment.driveFile?.id ?? '',
+        raw: attachment,
+      };
+    });
+  }, [selectedGoogleSubmission]);
 
   const visibleStudentList = useMemo(() => {
     if (!showUngradedOnly && !hideCompleted) return studentList;
@@ -1263,6 +1310,107 @@ function App() {
       setGoogleSubmissionsStatus(error.message || '제출물 목록을 불러오는 중 오류가 발생했습니다.');
     } finally {
       setGoogleSubmissionsLoading(false);
+    }
+  };
+
+  const loadSelectedSubmissionImages = async () => {
+    if (!isGoogleConnected) {
+      setGoogleSubmissionImagesStatus('먼저 Google Classroom을 연결해 주세요.');
+      return;
+    }
+    if (!selectedGoogleSubmission) {
+      setGoogleSubmissionImagesStatus('먼저 제출물을 선택해 주세요.');
+      return;
+    }
+
+    const attachments = selectedGoogleSubmission.raw?.assignmentSubmission?.attachments ?? [];
+    const driveFiles = attachments
+      .map((attachment) => attachment.driveFile)
+      .filter((driveFile) => driveFile?.id)
+      .map((driveFile) => ({
+        fileId: driveFile.id,
+        title: driveFile.title ?? '',
+        alternateLink: driveFile.alternateLink ?? '',
+        thumbnailUrl: driveFile.thumbnailUrl ?? '',
+      }));
+
+    if (driveFiles.length === 0) {
+      setGoogleSubmissionImages([]);
+      setGoogleSubmissionImagesStatus('선택한 제출물에 Drive 첨부파일이 없습니다.');
+      return;
+    }
+
+    setGoogleSubmissionImagesLoading(true);
+    setGoogleSubmissionImagesStatus('첨부 이미지 파일을 확인하는 중입니다.');
+
+    try {
+      const images = [];
+
+      for (const driveFile of driveFiles) {
+        const metadataResponse = await fetch(
+          `https://www.googleapis.com/drive/v3/files/${driveFile.fileId}?fields=id,name,mimeType,thumbnailLink,webViewLink,webContentLink&supportsAllDrives=true`,
+          {
+            headers: {
+              Authorization: `Bearer ${googleAccessToken}`,
+            },
+          }
+        );
+        const metadata = await metadataResponse.json();
+
+        if (!metadataResponse.ok) {
+          throw new Error(metadata.error?.message ?? 'Drive 파일 정보를 불러오지 못했습니다.');
+        }
+        if (!isSupportedImageFile(metadata)) continue;
+
+        const mediaResponse = await fetch(
+          `https://www.googleapis.com/drive/v3/files/${driveFile.fileId}?alt=media&supportsAllDrives=true`,
+          {
+            headers: {
+              Authorization: `Bearer ${googleAccessToken}`,
+            },
+          }
+        );
+
+        if (!mediaResponse.ok) {
+          const errorText = await mediaResponse.text();
+          throw new Error(errorText || 'Drive 이미지 파일을 다운로드하지 못했습니다.');
+        }
+
+        const blob = await mediaResponse.blob();
+        const dataUrl = await readBlobAsDataUrl(blob);
+        images.push({
+          id: makeId(),
+          fileId: driveFile.fileId,
+          name: metadata.name ?? driveFile.title ?? 'Google Classroom 첨부 이미지',
+          type: metadata.mimeType || blob.type || 'image/jpeg',
+          dataUrl,
+          source: 'google-classroom',
+          submissionId: selectedGoogleSubmission.id,
+          studentName: selectedGoogleSubmission.studentName,
+          studentEmail: selectedGoogleSubmission.studentEmail,
+          webViewLink: metadata.webViewLink ?? driveFile.alternateLink,
+          thumbnailLink: metadata.thumbnailLink ?? driveFile.thumbnailUrl,
+        });
+      }
+
+      setGoogleSubmissionImages(images);
+      setUploadedImages(images);
+      if (currentNormalizedStudentKey) {
+        setStudentImageMap((current) => ({
+          ...current,
+          [currentNormalizedStudentKey]: images,
+        }));
+      }
+      setImageUploadStatus(`${images.length}장의 Classroom 첨부 이미지를 AI 보조에 연결했습니다.`);
+      setGoogleSubmissionImagesStatus(
+        images.length > 0
+          ? `${images.length}장의 이미지 첨부파일을 가져와 AI 보조에 연결했습니다.`
+          : '첨부파일 중 지원하는 이미지(jpg, jpeg, png, webp)가 없습니다.'
+      );
+    } catch (error) {
+      setGoogleSubmissionImagesStatus(error.message || '첨부 이미지를 가져오는 중 오류가 발생했습니다.');
+    } finally {
+      setGoogleSubmissionImagesLoading(false);
     }
   };
 
@@ -2117,6 +2265,8 @@ function App() {
                   setGoogleStudentSubmissions([]);
                   setSelectedGoogleSubmissionId('');
                   setGoogleSubmissionsStatus('');
+                  setGoogleSubmissionImages([]);
+                  setGoogleSubmissionImagesStatus('');
                 }}
                 disabled={googleCourses.length === 0}
               >
@@ -2161,6 +2311,8 @@ function App() {
                   setGoogleStudentSubmissions([]);
                   setSelectedGoogleSubmissionId('');
                   setGoogleSubmissionsStatus('');
+                  setGoogleSubmissionImages([]);
+                  setGoogleSubmissionImagesStatus('');
                 }}
                 disabled={googleCourseWork.length === 0}
               >
@@ -2213,7 +2365,11 @@ function App() {
                       className={selectedGoogleSubmissionId === submission.id ? 'selected' : ''}
                       key={submission.id}
                       type="button"
-                      onClick={() => setSelectedGoogleSubmissionId(submission.id)}
+                      onClick={() => {
+                        setSelectedGoogleSubmissionId(submission.id);
+                        setGoogleSubmissionImages([]);
+                        setGoogleSubmissionImagesStatus('');
+                      }}
                     >
                       <strong>{submission.studentName}</strong>
                       <span>{formatSubmissionState(submission.state)}</span>
@@ -2232,10 +2388,59 @@ function App() {
                 {selectedGoogleSubmission.studentEmail && <span>{selectedGoogleSubmission.studentEmail}</span>}
                 <span>상태: {formatSubmissionState(selectedGoogleSubmission.state)}</span>
                 <span>제출 시간: {formatDateTime(selectedGoogleSubmission.updateTime || selectedGoogleSubmission.creationTime)}</span>
+                <button
+                  className="secondary-button inline-action-button"
+                  type="button"
+                  onClick={loadSelectedSubmissionImages}
+                  disabled={googleSubmissionImagesLoading}
+                >
+                  {googleSubmissionImagesLoading ? '이미지 가져오는 중' : '첨부 이미지 가져오기'}
+                </button>
               </div>
             )}
 
             {googleSubmissionsStatus && <p className="pdf-status">{googleSubmissionsStatus}</p>}
+
+            {selectedGoogleSubmission && (
+              <details className="debug-json-box">
+                <summary>선택한 제출물 attachment JSON 보기</summary>
+                <pre>
+                  {JSON.stringify(
+                    {
+                      submissionId: selectedGoogleSubmission.id,
+                      studentName: selectedGoogleSubmission.studentName,
+                      studentEmail: selectedGoogleSubmission.studentEmail,
+                      attachmentCount: selectedGoogleSubmissionAttachmentDebug.length,
+                      attachments: selectedGoogleSubmissionAttachmentDebug,
+                    },
+                    null,
+                    2
+                  )}
+                </pre>
+              </details>
+            )}
+
+            {googleSubmissionImages.length > 0 && (
+              <div className="classroom-attachment-box">
+                <div className="submission-list-head">
+                  <strong>첨부 이미지 목록</strong>
+                  <span>{googleSubmissionImages.length}장</span>
+                </div>
+                <div className="classroom-image-grid">
+                  {googleSubmissionImages.map((image) => (
+                    <figure className="image-preview-card" key={image.id}>
+                      <img src={image.dataUrl} alt={image.name} />
+                      <figcaption>
+                        <span>{image.name}</span>
+                        <small>fileId: {image.fileId}</small>
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {googleSubmissionImagesStatus && <p className="pdf-status">{googleSubmissionImagesStatus}</p>}
 
             <div className="action-row">
               <button className="secondary-button" onClick={disconnectGoogleClassroom} disabled={!googleAccessToken}>

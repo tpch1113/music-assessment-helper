@@ -749,7 +749,8 @@ textarea:focus {
 }
 
 .classroom-course-box,
-.selected-course-card {
+.selected-course-card,
+.classroom-attachment-box {
   border: 1px solid #dce2d5;
   border-radius: 8px;
   background: #fbfcfa;
@@ -776,6 +777,54 @@ textarea:focus {
   color: #667585;
   font-size: 0.9rem;
   overflow-wrap: anywhere;
+}
+
+.inline-action-button {
+  justify-self: start;
+  margin-top: 10px;
+}
+
+.classroom-attachment-box {
+  display: grid;
+  gap: 12px;
+}
+
+.classroom-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+}
+
+.classroom-image-grid small {
+  color: #667585;
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.debug-json-box {
+  border: 1px solid #dce2d5;
+  border-radius: 8px;
+  background: #fbfcfa;
+  padding: 12px;
+}
+
+.debug-json-box summary {
+  color: #24506f;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.debug-json-box pre {
+  overflow: auto;
+  max-height: 360px;
+  margin: 12px 0 0;
+  border-radius: 6px;
+  background: #18212f;
+  color: #f5f7f2;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  padding: 12px;
+  white-space: pre-wrap;
 }
 
 .submission-list-box {
