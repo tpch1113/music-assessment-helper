@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 const STORAGE_KEY = 'music-assessment-helper-state';
 const tabs = ['기준표', '학생 목록', '채점', 'AI 보조', '결과', '설정'];
 const GOOGLE_IDENTITY_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
+const SHEETJS_SCRIPT_URL = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+const assessmentPresets = ['세계 민요 총괄평가', '음악 프로젝트 수행평가', '작곡 수행평가'];
 const GOOGLE_CLASSROOM_LOGIN_SCOPE = [
   'openid',
   'email',
@@ -22,9 +24,11 @@ const makeId = () => crypto.randomUUID();
 
 const emptyStudent = {
   id: '',
+  grade: '',
   className: '',
   number: '',
   name: '',
+  email: '',
 };
 
 function createLevels() {
@@ -171,6 +175,29 @@ function loadGoogleIdentityScript() {
   });
 }
 
+function loadSheetJsScript() {
+  return new Promise((resolve, reject) => {
+    if (window.XLSX) {
+      resolve(window.XLSX);
+      return;
+    }
+
+    const existingScript = document.querySelector(`script[src="${SHEETJS_SCRIPT_URL}"]`);
+    if (existingScript) {
+      existingScript.addEventListener('load', () => resolve(window.XLSX), { once: true });
+      existingScript.addEventListener('error', reject, { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = SHEETJS_SCRIPT_URL;
+    script.async = true;
+    script.onload = () => resolve(window.XLSX);
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+}
+
 function studentKey(student) {
   return [student.className, student.number, student.name].map((item) => item.trim()).join('|');
 }
@@ -179,6 +206,35 @@ function normalizeStudentPart(value) {
   const text = String(value ?? '').trim();
   const withoutLeadingZeros = text.replace(/^0+(?=\d)/, '');
   return withoutLeadingZeros || text;
+}
+
+function normalizeMatchText(value) {
+  return String(value ?? '').trim().replace(/\s+/g, '').toLowerCase();
+}
+
+function slugify(value) {
+  const text = String(value ?? '').trim().toLowerCase();
+  const slug = text
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9가-힣_-]/g, '')
+    .replace(/-+/g, '-');
+  return slug || 'assessment';
+}
+
+function makeClassContextKey(grade, className, assessmentTitle) {
+  return `students_${normalizeStudentPart(grade)}_${normalizeStudentPart(className)}_${slugify(assessmentTitle)}`;
+}
+
+function makeRosterClassKey(grade, className) {
+  return `roster_${normalizeStudentPart(grade)}_${normalizeStudentPart(className)}`;
+}
+
+function normalizeClassContext(grade, className, assessmentTitle) {
+  return {
+    grade: normalizeStudentPart(grade),
+    className: normalizeStudentPart(className),
+    assessmentTitle: String(assessmentTitle ?? '').trim() || '음악 프로젝트 수행평가',
+  };
 }
 
 function normalizedStudentKey(student) {
@@ -236,10 +292,75 @@ function parseStudentLines(text) {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const [className = '', number = '', name = ''] = line.split(',').map((item) => item.trim());
-      return { id: makeId(), className, number, name };
+      const [className = '', number = '', name = '', email = ''] = line.split(',').map((item) => item.trim());
+      return { id: makeId(), className, number, name, email };
     })
     .filter((student) => student.className && student.number && student.name);
+}
+
+function parseCsvRows(text) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === ',' && !quoted) {
+      row.push(cell.trim());
+      cell = '';
+    } else if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && next === '\n') index += 1;
+      row.push(cell.trim());
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += char;
+    }
+  }
+
+  row.push(cell.trim());
+  if (row.some(Boolean)) rows.push(row);
+  return rows;
+}
+
+function findHeaderIndex(headers, names) {
+  return headers.findIndex((header) => names.includes(normalizeMatchText(header)));
+}
+
+function rowsToStudents(rows, fallbackContext) {
+  if (rows.length === 0) return [];
+
+  const firstRow = rows[0].map((cell) => String(cell ?? '').trim());
+  const normalizedHeaders = firstRow.map(normalizeMatchText);
+  const hasHeaders = ['학년', '반', '번호', '이름', '성명', 'email', '이메일'].some((header) =>
+    normalizedHeaders.includes(normalizeMatchText(header))
+  );
+  const headers = hasHeaders ? firstRow : [];
+  const bodyRows = hasHeaders ? rows.slice(1) : rows;
+  const gradeIndex = hasHeaders ? findHeaderIndex(headers, ['학년', 'grade']) : 0;
+  const classIndex = hasHeaders ? findHeaderIndex(headers, ['반', 'class', 'classname', '학급']) : 1;
+  const numberIndex = hasHeaders ? findHeaderIndex(headers, ['번호', 'number', '번']) : 2;
+  const nameIndex = hasHeaders ? findHeaderIndex(headers, ['이름', '성명', 'name', 'studentname']) : 3;
+  const emailIndex = hasHeaders ? findHeaderIndex(headers, ['이메일', 'email', '메일', 'googleemail']) : 4;
+
+  return bodyRows
+    .map((row) => {
+      const grade = String(row[gradeIndex] ?? fallbackContext.grade ?? '').trim();
+      const className = String(row[classIndex] ?? fallbackContext.className ?? '').trim();
+      const number = String(row[numberIndex] ?? '').trim();
+      const name = String(row[nameIndex] ?? '').trim();
+      const email = emailIndex >= 0 ? String(row[emailIndex] ?? '').trim() : '';
+      return { id: makeId(), grade, className, number, name, email };
+    })
+    .filter((item) => item.grade && item.className && item.number && item.name);
 }
 
 function readFileAsDataUrl(file) {
@@ -268,6 +389,17 @@ async function extractTextFromPdf(file) {
 
 function App() {
   const [activeTab, setActiveTab] = useState('기준표');
+  const loadedContextKeyRef = useRef('');
+  const skipStudentSyncRef = useRef(false);
+  const skipResultSyncRef = useRef(false);
+  const [selectedGrade, setSelectedGrade] = useState('1');
+  const [selectedClassName, setSelectedClassName] = useState('1');
+  const [selectedAssessmentTitle, setSelectedAssessmentTitle] = useState('음악 프로젝트 수행평가');
+  const [studentListsByContext, setStudentListsByContext] = useState({});
+  const [resultsByContext, setResultsByContext] = useState({});
+  const [masterRosterByClass, setMasterRosterByClass] = useState({});
+  const [masterRosterStatus, setMasterRosterStatus] = useState('');
+  const [studentImportStatus, setStudentImportStatus] = useState('');
   const [rubric, setRubric] = useState(defaultRubric);
   const [savedRubrics, setSavedRubrics] = useState([]);
   const [selectedRubricId, setSelectedRubricId] = useState('');
@@ -301,6 +433,8 @@ function App() {
   const [googleSubmissionImages, setGoogleSubmissionImages] = useState([]);
   const [googleSubmissionImagesStatus, setGoogleSubmissionImagesStatus] = useState('');
   const [googleSubmissionImagesLoading, setGoogleSubmissionImagesLoading] = useState(false);
+  const [manualGoogleStudentId, setManualGoogleStudentId] = useState('');
+  const [googleAiLinkStatus, setGoogleAiLinkStatus] = useState('');
   const [googleAuthStatus, setGoogleAuthStatus] = useState('');
   const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
   const [studentWorkText, setStudentWorkText] = useState('');
@@ -324,12 +458,54 @@ function App() {
     setRubric(saved.rubric ?? defaultRubric);
     setSavedRubrics(saved.savedRubrics ?? []);
     setSelectedRubricId(saved.selectedRubricId ?? '');
-    setStudentList(saved.studentList ?? []);
+    const savedContext = normalizeClassContext(
+      saved.selectedGrade ?? '1',
+      saved.selectedClassName ?? '1',
+      saved.selectedAssessmentTitle ?? saved.rubric?.title ?? '음악 프로젝트 수행평가'
+    );
+    const savedContextKey = makeClassContextKey(
+      savedContext.grade,
+      savedContext.className,
+      savedContext.assessmentTitle
+    );
+    const migratedStudentLists = {
+      ...(saved.studentListsByContext ?? {}),
+    };
+    const migratedResults = {
+      ...(saved.resultsByContext ?? {}),
+    };
+    if (!migratedStudentLists[savedContextKey] && Array.isArray(saved.studentList) && saved.studentList.length > 0) {
+      migratedStudentLists[savedContextKey] = saved.studentList.map((item) => ({
+        ...item,
+        grade: item.grade ?? savedContext.grade,
+        className: item.className ?? savedContext.className,
+        email: item.email ?? '',
+      }));
+    }
+    if (!migratedResults[savedContextKey] && Array.isArray(saved.results) && saved.results.length > 0) {
+      migratedResults[savedContextKey] = saved.results.map((item) => ({
+        ...item,
+        grade: item.grade ?? savedContext.grade,
+        assessmentTitle: item.assessmentTitle ?? savedContext.assessmentTitle,
+      }));
+    }
+    setSelectedGrade(savedContext.grade);
+    setSelectedClassName(savedContext.className);
+    setSelectedAssessmentTitle(savedContext.assessmentTitle);
+    setStudentListsByContext(migratedStudentLists);
+    setResultsByContext(migratedResults);
+    setMasterRosterByClass(saved.masterRosterByClass ?? {});
+    loadedContextKeyRef.current = savedContextKey;
+    setStudentList(
+      migratedStudentLists[savedContextKey] ??
+        saved.masterRosterByClass?.[makeRosterClassKey(savedContext.grade, savedContext.className)] ??
+        []
+    );
     setStudentBulkText(saved.studentBulkText ?? '1,1,김민서\n1,2,박지훈\n1,3,이서연');
     setStudent(saved.student ?? emptyStudent);
     setScores(saved.scores ?? {});
     setTeacherMemo(saved.teacherMemo ?? '');
-    setResults(saved.results ?? []);
+    setResults(migratedResults[savedContextKey] ?? []);
     setActiveTab(saved.activeTab ?? '기준표');
     setShowUngradedOnly(saved.showUngradedOnly ?? false);
     setHideCompleted(saved.hideCompleted ?? false);
@@ -356,6 +532,12 @@ function App() {
       STORAGE_KEY,
       JSON.stringify({
         activeTab,
+        selectedGrade,
+        selectedClassName,
+        selectedAssessmentTitle,
+        studentListsByContext,
+        resultsByContext,
+        masterRosterByClass,
         rubric,
         savedRubrics,
         selectedRubricId,
@@ -387,6 +569,12 @@ function App() {
     );
   }, [
     activeTab,
+    selectedGrade,
+    selectedClassName,
+    selectedAssessmentTitle,
+    studentListsByContext,
+    resultsByContext,
+    masterRosterByClass,
     rubric,
     savedRubrics,
     selectedRubricId,
@@ -466,6 +654,21 @@ function App() {
     return map;
   }, [results]);
 
+  const currentClassContext = useMemo(() => {
+    return normalizeClassContext(selectedGrade, selectedClassName, selectedAssessmentTitle);
+  }, [selectedAssessmentTitle, selectedClassName, selectedGrade]);
+  const currentClassContextKey = useMemo(() => {
+    return makeClassContextKey(
+      currentClassContext.grade,
+      currentClassContext.className,
+      currentClassContext.assessmentTitle
+    );
+  }, [currentClassContext]);
+  const currentRosterClassKey = useMemo(() => {
+    return makeRosterClassKey(currentClassContext.grade, currentClassContext.className);
+  }, [currentClassContext]);
+  const currentMasterRoster = masterRosterByClass[currentRosterClassKey] ?? [];
+
   const currentStudentKey = studentKey(student);
   const currentNormalizedStudentKey = normalizedStudentKey(student);
   const isGoogleConnected = Boolean(googleAccessToken) && Date.now() < googleTokenExpiresAt;
@@ -500,6 +703,42 @@ function App() {
       };
     });
   }, [selectedGoogleSubmission]);
+  const autoMatchedGoogleStudent = useMemo(() => {
+    if (!selectedGoogleSubmission) return null;
+
+    const submissionName = normalizeMatchText(selectedGoogleSubmission.studentName);
+    const submissionEmail = normalizeMatchText(selectedGoogleSubmission.studentEmail);
+    const submissionEmailName = normalizeMatchText(selectedGoogleSubmission.studentEmail?.split('@')[0]);
+
+    return (
+      studentList.find((item) => {
+        const studentName = normalizeMatchText(item.name);
+        const studentEmail = normalizeMatchText(item.email);
+        if (submissionEmail && studentEmail && submissionEmail === studentEmail) return true;
+        if (
+          submissionName &&
+          studentName &&
+          submissionName === studentName &&
+          normalizeStudentPart(item.className) === currentClassContext.className
+        ) {
+          return true;
+        }
+        if (
+          submissionEmailName &&
+          studentName &&
+          submissionEmailName === studentName &&
+          normalizeStudentPart(item.className) === currentClassContext.className
+        ) {
+          return true;
+        }
+        return false;
+      }) ?? null
+    );
+  }, [currentClassContext.className, selectedGoogleSubmission, studentList]);
+  const manualGoogleStudent = useMemo(() => {
+    return studentList.find((item) => item.id === manualGoogleStudentId) ?? null;
+  }, [manualGoogleStudentId, studentList]);
+  const googleAiTargetStudent = autoMatchedGoogleStudent ?? manualGoogleStudent;
 
   const visibleStudentList = useMemo(() => {
     if (!showUngradedOnly && !hideCompleted) return studentList;
@@ -585,6 +824,60 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeTab, flatCriteria, scores]);
 
+  useEffect(() => {
+    if (!currentClassContextKey) return;
+    if (loadedContextKeyRef.current === currentClassContextKey) return;
+
+    loadedContextKeyRef.current = currentClassContextKey;
+    skipStudentSyncRef.current = true;
+    skipResultSyncRef.current = true;
+    setStudentList(studentListsByContext[currentClassContextKey] ?? masterRosterByClass[currentRosterClassKey] ?? []);
+    setResults(resultsByContext[currentClassContextKey] ?? []);
+    resetAssessmentForm();
+  }, [currentClassContextKey, currentRosterClassKey, masterRosterByClass, resultsByContext, studentListsByContext]);
+
+  useEffect(() => {
+    if (loadedContextKeyRef.current !== currentClassContextKey) return;
+    if (skipStudentSyncRef.current) {
+      skipStudentSyncRef.current = false;
+      return;
+    }
+    setStudentListsByContext((current) => {
+      if (current[currentClassContextKey] === studentList) return current;
+      return { ...current, [currentClassContextKey]: studentList };
+    });
+  }, [currentClassContextKey, studentList]);
+
+  useEffect(() => {
+    if (studentList.length > 0) return;
+    if (currentMasterRoster.length === 0) return;
+    if (studentListsByContext[currentClassContextKey]?.length > 0) return;
+
+    setStudentList(currentMasterRoster);
+  }, [currentClassContextKey, currentMasterRoster, studentList.length, studentListsByContext]);
+
+  useEffect(() => {
+    if (loadedContextKeyRef.current !== currentClassContextKey) return;
+    if (skipResultSyncRef.current) {
+      skipResultSyncRef.current = false;
+      return;
+    }
+    setResultsByContext((current) => {
+      if (current[currentClassContextKey] === results) return current;
+      return { ...current, [currentClassContextKey]: results };
+    });
+  }, [currentClassContextKey, results]);
+
+  useEffect(() => {
+    if (!autoMatchedGoogleStudent) return;
+    if (studentKey(student) === studentKey(autoMatchedGoogleStudent)) return;
+
+    const existing = resultMap.get(studentKey(autoMatchedGoogleStudent));
+    setStudent({ ...autoMatchedGoogleStudent, id: autoMatchedGoogleStudent.id ?? existing?.studentId ?? makeId() });
+    setScores(existing?.scores ?? {});
+    setTeacherMemo(existing?.teacherMemo ?? '');
+  }, [autoMatchedGoogleStudent, resultMap, student]);
+
   const resetAssessmentForm = () => {
     setStudent(emptyStudent);
     setScores({});
@@ -631,9 +924,14 @@ function App() {
   };
 
   const importStudents = () => {
-    const imported = parseStudentLines(studentBulkText);
+    const imported = parseStudentLines(studentBulkText).map((item) => ({
+      ...item,
+      grade: item.grade || currentClassContext.grade,
+      className: item.className || currentClassContext.className,
+      email: item.email ?? '',
+    }));
     if (imported.length === 0) {
-      alert('학생 목록을 1,1,김민서 형식으로 입력해 주세요.');
+      alert('학생 목록을 1,1,김민서 또는 1,1,김민서,email@example.com 형식으로 입력해 주세요.');
       return;
     }
 
@@ -647,6 +945,160 @@ function App() {
       });
     });
     setActiveTab('학생 목록');
+  };
+
+  const mergeStudentsByContext = (students) => {
+    const grouped = new Map();
+    students.forEach((item) => {
+      const context = normalizeClassContext(item.grade, item.className, currentClassContext.assessmentTitle);
+      const key = makeClassContextKey(context.grade, context.className, context.assessmentTitle);
+      const normalizedStudent = {
+        ...item,
+        grade: context.grade,
+        className: context.className,
+        email: item.email ?? '',
+      };
+      grouped.set(key, [...(grouped.get(key) ?? []), normalizedStudent]);
+    });
+
+    setStudentListsByContext((current) => {
+      const next = { ...current };
+      grouped.forEach((items, key) => {
+        const existing = next[key] ?? [];
+        const existingKeys = new Set(existing.map(studentKey));
+        const additions = items.filter((item) => !existingKeys.has(studentKey(item)));
+        next[key] = [...existing, ...additions].sort((a, b) => {
+          const classCompare = Number(a.className) - Number(b.className);
+          if (classCompare) return classCompare;
+          return Number(a.number) - Number(b.number);
+        });
+      });
+      return next;
+    });
+
+    const currentItems = grouped.get(currentClassContextKey) ?? [];
+    if (currentItems.length > 0) {
+      setStudentList((current) => {
+        const currentKeys = new Set(current.map(studentKey));
+        const additions = currentItems.filter((item) => !currentKeys.has(studentKey(item)));
+        return [...current, ...additions].sort((a, b) => {
+          const classCompare = Number(a.className) - Number(b.className);
+          if (classCompare) return classCompare;
+          return Number(a.number) - Number(b.number);
+        });
+      });
+    }
+
+    return grouped;
+  };
+
+  const groupStudentsByRosterClass = (students) => {
+    const grouped = new Map();
+    students.forEach((item) => {
+      const grade = normalizeStudentPart(item.grade || currentClassContext.grade);
+      const className = normalizeStudentPart(item.className || currentClassContext.className);
+      const key = makeRosterClassKey(grade, className);
+      grouped.set(key, [
+        ...(grouped.get(key) ?? []),
+        {
+          ...item,
+          id: item.id || makeId(),
+          grade,
+          className,
+          email: item.email ?? '',
+        },
+      ]);
+    });
+    return grouped;
+  };
+
+  const handleMasterRosterUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setMasterRosterStatus('명렬표 파일을 읽는 중입니다.');
+
+    try {
+      let rows = [];
+      const extension = file.name.split('.').pop()?.toLowerCase();
+
+      if (extension === 'csv') {
+        rows = parseCsvRows(await file.text());
+      } else if (['xlsx', 'xls'].includes(extension)) {
+        const XLSX = await loadSheetJsScript();
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheetName], { header: 1, defval: '' });
+      } else {
+        throw new Error('xlsx, xls, csv 파일만 업로드할 수 있습니다.');
+      }
+
+      const imported = rowsToStudents(rows, currentClassContext);
+      if (imported.length === 0) {
+        throw new Error('인식할 수 있는 학생 데이터가 없습니다.');
+      }
+
+      const grouped = groupStudentsByRosterClass(imported);
+      setMasterRosterByClass((current) => {
+        const next = { ...current };
+        grouped.forEach((items, key) => {
+          next[key] = [...items].sort((a, b) => {
+            const classCompare = Number(a.className) - Number(b.className);
+            if (classCompare) return classCompare;
+            return Number(a.number) - Number(b.number);
+          });
+        });
+        return next;
+      });
+
+      const currentItems = grouped.get(currentRosterClassKey);
+      if (currentItems) {
+        setStudentList([...currentItems].sort((a, b) => Number(a.number) - Number(b.number)));
+      }
+
+      setMasterRosterStatus(`${imported.length}명의 명렬표를 ${grouped.size}개 학년/반으로 저장했습니다.`);
+    } catch (error) {
+      setMasterRosterStatus(error.message || '명렬표 파일을 읽지 못했습니다.');
+    } finally {
+      event.target.value = '';
+    }
+  };
+
+  const handleStudentFileUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setStudentImportStatus('학생 명단 파일을 읽는 중입니다.');
+
+    try {
+      let rows = [];
+      const extension = file.name.split('.').pop()?.toLowerCase();
+
+      if (extension === 'csv') {
+        rows = parseCsvRows(await file.text());
+      } else if (['xlsx', 'xls'].includes(extension)) {
+        const XLSX = await loadSheetJsScript();
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheetName], { header: 1, defval: '' });
+      } else {
+        throw new Error('xlsx, xls, csv 파일만 업로드할 수 있습니다.');
+      }
+
+      const imported = rowsToStudents(rows, currentClassContext);
+      if (imported.length === 0) {
+        throw new Error('인식할 수 있는 학생 데이터가 없습니다.');
+      }
+
+      const grouped = mergeStudentsByContext(imported);
+      setStudentImportStatus(`${imported.length}명의 학생을 ${grouped.size}개 학년/반 묶음으로 저장했습니다.`);
+    } catch (error) {
+      setStudentImportStatus(error.message || '학생 명단 파일을 읽지 못했습니다.');
+    } finally {
+      event.target.value = '';
+    }
   };
 
   const removeStudent = (studentId) => {
@@ -832,10 +1284,13 @@ function App() {
       studentId: student.id || existing?.studentId || makeId(),
       studentKey: key,
       rubricId: rubric.id,
-      assessmentTitle: rubric.title,
+      contextKey: currentClassContextKey,
+      grade: currentClassContext.grade,
+      assessmentTitle: currentClassContext.assessmentTitle,
       className: student.className.trim(),
       number: student.number.trim(),
       name: student.name.trim(),
+      email: student.email?.trim() ?? '',
       scores,
       totalScore,
       maxScore,
@@ -855,7 +1310,17 @@ function App() {
     });
     setStudentList((current) => {
       if (current.some((item) => studentKey(item) === key)) return current;
-      return [...current, { id: result.studentId, className: result.className, number: result.number, name: result.name }];
+      return [
+        ...current,
+        {
+          id: result.studentId,
+          grade: result.grade,
+          className: result.className,
+          number: result.number,
+          name: result.name,
+          email: result.email,
+        },
+      ];
     });
     setActiveTab('채점');
     setTimeout(() => selectNextStudentAfterSave(key), 0);
@@ -1316,11 +1781,11 @@ function App() {
   const loadSelectedSubmissionImages = async () => {
     if (!isGoogleConnected) {
       setGoogleSubmissionImagesStatus('먼저 Google Classroom을 연결해 주세요.');
-      return;
+      return [];
     }
     if (!selectedGoogleSubmission) {
       setGoogleSubmissionImagesStatus('먼저 제출물을 선택해 주세요.');
-      return;
+      return [];
     }
 
     const attachments = selectedGoogleSubmission.raw?.assignmentSubmission?.attachments ?? [];
@@ -1337,7 +1802,7 @@ function App() {
     if (driveFiles.length === 0) {
       setGoogleSubmissionImages([]);
       setGoogleSubmissionImagesStatus('선택한 제출물에 Drive 첨부파일이 없습니다.');
-      return;
+      return [];
     }
 
     setGoogleSubmissionImagesLoading(true);
@@ -1407,11 +1872,56 @@ function App() {
           ? `${images.length}장의 이미지 첨부파일을 가져와 AI 보조에 연결했습니다.`
           : '첨부파일 중 지원하는 이미지(jpg, jpeg, png, webp)가 없습니다.'
       );
+      return images;
     } catch (error) {
       setGoogleSubmissionImagesStatus(error.message || '첨부 이미지를 가져오는 중 오류가 발생했습니다.');
+      return [];
     } finally {
       setGoogleSubmissionImagesLoading(false);
     }
+  };
+
+  const connectSelectedSubmissionToAi = async () => {
+    const targetStudent = googleAiTargetStudent;
+    if (!selectedGoogleSubmission) {
+      setGoogleAiLinkStatus('먼저 제출물을 선택해 주세요.');
+      return;
+    }
+    if (!targetStudent) {
+      setGoogleAiLinkStatus('학생 목록에서 연결할 학생을 직접 선택해 주세요.');
+      return;
+    }
+
+    let images = googleSubmissionImages;
+    if (images.length === 0) {
+      images = await loadSelectedSubmissionImages();
+    }
+
+    if (images.length === 0) {
+      setGoogleAiLinkStatus('AI 보조에 연결할 첨부 이미지가 없습니다.');
+      return;
+    }
+
+    const key = studentKey(targetStudent);
+    const existing = resultMap.get(key);
+    const normalizedKey = normalizedStudentKey(targetStudent);
+
+    setStudent({ ...targetStudent, id: targetStudent.id ?? existing?.studentId ?? makeId() });
+    setScores(existing?.scores ?? {});
+    setTeacherMemo(existing?.teacherMemo ?? '');
+    setStudentWorkText(existing?.studentWorkText ?? '');
+    setAiSuggestions(existing?.aiSuggestions ?? []);
+    setAiFeedbackDraft(existing?.aiFeedbackDraft ?? '');
+    setAiSummary(existing?.aiSummary ?? '');
+    setUploadedImages(images);
+    setStudentImageMap((current) => ({
+      ...current,
+      [normalizedKey]: images,
+    }));
+    setImageUploadStatus(`${images.length}장의 Classroom 첨부 이미지가 연결되었습니다.`);
+    setGoogleAiLinkStatus(`${targetStudent.name} 학생과 이미지 ${images.length}장을 AI 보조에 연결했습니다.`);
+    setActiveTab('AI 보조');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const runAiAssessment = async () => {
@@ -1589,6 +2099,10 @@ function App() {
         <div>
           <p className="eyebrow">중학교 음악</p>
           <h1>음악 수행평가 채점 도우미</h1>
+          <p className="current-context">
+            현재 작업: {currentClassContext.grade}학년 {currentClassContext.className}반 /{' '}
+            {currentClassContext.assessmentTitle}
+          </p>
         </div>
         <div className="score-pill">
           <span>채점 진행</span>
@@ -1751,6 +2265,76 @@ function App() {
       {activeTab === '학생 목록' && (
         <section className="two-column">
           <div className="panel">
+            <div className="context-box">
+              <div className="panel-heading compact-heading">
+                <div>
+                  <p className="eyebrow">현재 작업</p>
+                  <h2>
+                    {currentClassContext.grade}학년 {currentClassContext.className}반 /{' '}
+                    {currentClassContext.assessmentTitle}
+                  </h2>
+                </div>
+              </div>
+
+              <div className="context-grid">
+                <label className="field">
+                  <span>학년</span>
+                  <select value={selectedGrade} onChange={(event) => setSelectedGrade(event.target.value)}>
+                    <option value="1">1학년</option>
+                    <option value="2">2학년</option>
+                    <option value="3">3학년</option>
+                  </select>
+                </label>
+
+                <label className="field">
+                  <span>반</span>
+                  <input
+                    list="class-options"
+                    value={selectedClassName}
+                    onChange={(event) => setSelectedClassName(event.target.value)}
+                    placeholder="7"
+                  />
+                  <datalist id="class-options">
+                    {Array.from({ length: 10 }, (_, index) => (
+                      <option key={index + 1} value={String(index + 1)}>
+                        {index + 1}반
+                      </option>
+                    ))}
+                  </datalist>
+                </label>
+
+                <label className="field">
+                  <span>수행평가</span>
+                  <input
+                    list="assessment-options"
+                    value={selectedAssessmentTitle}
+                    onChange={(event) => setSelectedAssessmentTitle(event.target.value)}
+                    placeholder="세계 민요 총괄평가"
+                  />
+                  <datalist id="assessment-options">
+                    {assessmentPresets.map((item) => (
+                      <option key={item} value={item} />
+                    ))}
+                  </datalist>
+                </label>
+              </div>
+            </div>
+
+            <div className="roster-master-box">
+              <div>
+                <p className="eyebrow">명렬표 관리</p>
+                <h2>학교 명렬표 마스터</h2>
+                <span>
+                  현재 반 명렬표: {currentMasterRoster.length}명 · 업로드하면 학년/반별로 자동 저장됩니다.
+                </span>
+              </div>
+              <label className="file-button">
+                명렬표 업로드
+                <input type="file" accept=".xlsx,.xls,.csv,text/csv" onChange={handleMasterRosterUpload} />
+              </label>
+              {masterRosterStatus && <p className="pdf-status">{masterRosterStatus}</p>}
+            </div>
+
             <div className="panel-heading">
               <div>
                 <p className="eyebrow">학생 목록</p>
@@ -1769,6 +2353,17 @@ function App() {
                 placeholder={'1,1,김민서\n1,2,박지훈\n1,3,이서연'}
               />
             </label>
+            <div className="spreadsheet-upload-box">
+              <div>
+                <strong>엑셀/CSV 학생 명단 업로드</strong>
+                <span>xlsx, xls, csv 파일을 지원하며 학년, 반, 번호, 이름, 이메일 열을 자동 인식합니다.</span>
+              </div>
+              <label className="file-button">
+                명단 선택
+                <input type="file" accept=".xlsx,.xls,.csv,text/csv" onChange={handleStudentFileUpload} />
+              </label>
+              {studentImportStatus && <p className="pdf-status">{studentImportStatus}</p>}
+            </div>
           </div>
 
           <StudentListPanel
@@ -1842,6 +2437,14 @@ function App() {
                   value={student.name}
                   onChange={(event) => setStudent({ ...student, name: event.target.value })}
                   placeholder="김민서"
+                />
+              </label>
+              <label className="field">
+                <span>이메일</span>
+                <input
+                  value={student.email ?? ''}
+                  onChange={(event) => setStudent({ ...student, email: event.target.value })}
+                  placeholder="student@example.com"
                 />
               </label>
             </div>
@@ -2267,6 +2870,8 @@ function App() {
                   setGoogleSubmissionsStatus('');
                   setGoogleSubmissionImages([]);
                   setGoogleSubmissionImagesStatus('');
+                  setManualGoogleStudentId('');
+                  setGoogleAiLinkStatus('');
                 }}
                 disabled={googleCourses.length === 0}
               >
@@ -2313,6 +2918,8 @@ function App() {
                   setGoogleSubmissionsStatus('');
                   setGoogleSubmissionImages([]);
                   setGoogleSubmissionImagesStatus('');
+                  setManualGoogleStudentId('');
+                  setGoogleAiLinkStatus('');
                 }}
                 disabled={googleCourseWork.length === 0}
               >
@@ -2369,6 +2976,8 @@ function App() {
                         setSelectedGoogleSubmissionId(submission.id);
                         setGoogleSubmissionImages([]);
                         setGoogleSubmissionImagesStatus('');
+                        setManualGoogleStudentId('');
+                        setGoogleAiLinkStatus('');
                       }}
                     >
                       <strong>{submission.studentName}</strong>
@@ -2388,6 +2997,35 @@ function App() {
                 {selectedGoogleSubmission.studentEmail && <span>{selectedGoogleSubmission.studentEmail}</span>}
                 <span>상태: {formatSubmissionState(selectedGoogleSubmission.state)}</span>
                 <span>제출 시간: {formatDateTime(selectedGoogleSubmission.updateTime || selectedGoogleSubmission.creationTime)}</span>
+                <div className="classroom-ai-link-box">
+                  <strong>AI 보조 연결</strong>
+                  <span>
+                    학생:
+                    {' '}
+                    {googleAiTargetStudent
+                      ? `${googleAiTargetStudent.className}반 ${googleAiTargetStudent.number}번 ${googleAiTargetStudent.name}`
+                      : '매칭된 학생 없음'}
+                  </span>
+                  <span>연결 이미지: {googleSubmissionImages.length}장</span>
+                  {!autoMatchedGoogleStudent && (
+                    <label className="field">
+                      <span>수동 학생 선택</span>
+                      <select
+                        value={manualGoogleStudentId}
+                        onChange={(event) => setManualGoogleStudentId(event.target.value)}
+                        disabled={studentList.length === 0}
+                      >
+                        <option value="">학생을 선택해 주세요</option>
+                        {studentList.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.className}반 {item.number}번 {item.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {googleAiLinkStatus && <span>{googleAiLinkStatus}</span>}
+                </div>
                 <button
                   className="secondary-button inline-action-button"
                   type="button"
@@ -2395,6 +3033,14 @@ function App() {
                   disabled={googleSubmissionImagesLoading}
                 >
                   {googleSubmissionImagesLoading ? '이미지 가져오는 중' : '첨부 이미지 가져오기'}
+                </button>
+                <button
+                  className="primary-button inline-action-button"
+                  type="button"
+                  onClick={connectSelectedSubmissionToAi}
+                  disabled={googleSubmissionImagesLoading}
+                >
+                  AI 보조 화면으로 이동
                 </button>
               </div>
             )}
@@ -2539,6 +3185,7 @@ function StudentListPanel({
                     <strong>
                       {item.className}반 {item.number}번 {item.name}
                     </strong>
+                    {item.email && <em>{item.email}</em>}
                     {imageCount > 0 && <em>작품 사진 있음 {imageCount}장</em>}
                   </span>
                   <span className={completed ? 'done' : 'pending'}>{completed ? '완료' : '미채점'}</span>

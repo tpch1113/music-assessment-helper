@@ -62,6 +62,12 @@ button:disabled {
   line-height: 1.08;
 }
 
+.current-context {
+  margin: 10px 0 0;
+  color: #52616f;
+  font-weight: 800;
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: #6d7a43;
@@ -394,8 +400,73 @@ textarea:focus {
 
 .student-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.4fr;
+  grid-template-columns: 1fr 1fr 1.4fr 1.8fr;
   gap: 10px;
+}
+
+.context-box {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 20px;
+  border-radius: 8px;
+  background: #eef3e9;
+  padding: 14px;
+}
+
+.context-grid {
+  display: grid;
+  grid-template-columns: 0.75fr 0.85fr minmax(0, 1.8fr);
+  gap: 10px;
+}
+
+.spreadsheet-upload-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+  border: 1px dashed #b9c9d6;
+  border-radius: 8px;
+  background: #f5f9fb;
+  padding: 14px;
+}
+
+.spreadsheet-upload-box strong,
+.spreadsheet-upload-box span {
+  display: block;
+}
+
+.spreadsheet-upload-box span {
+  margin-top: 4px;
+  color: #667585;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.roster-master-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 20px;
+  border: 1px solid #cbd8c2;
+  border-radius: 8px;
+  background: #eef3e9;
+  padding: 14px;
+}
+
+.roster-master-box h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.roster-master-box span {
+  display: block;
+  margin-top: 6px;
+  color: #52616f;
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1.45;
 }
 
 .bulk-textarea {
@@ -782,6 +853,26 @@ textarea:focus {
 .inline-action-button {
   justify-self: start;
   margin-top: 10px;
+}
+
+.classroom-ai-link-box {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border-radius: 8px;
+  background: #eef3e9;
+  padding: 12px;
+}
+
+.classroom-ai-link-box strong,
+.classroom-ai-link-box span {
+  display: block;
+}
+
+.classroom-ai-link-box span {
+  color: #394858;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
 }
 
 .classroom-attachment-box {
@@ -1326,6 +1417,12 @@ textarea:focus {
   }
 
   .student-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .context-grid,
+  .spreadsheet-upload-box,
+  .roster-master-box {
     grid-template-columns: 1fr;
   }
 
