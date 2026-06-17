@@ -11,6 +11,7 @@ const GOOGLE_CLASSROOM_LOGIN_SCOPE = [
   'profile',
   'https://www.googleapis.com/auth/classroom.courses.readonly',
   'https://www.googleapis.com/auth/classroom.coursework.students.readonly',
+  'https://www.googleapis.com/auth/classroom.profile.emails',
 ].join(' ');
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -84,6 +85,24 @@ function escapeCsv(value) {
 
 function formatScore(value) {
   return Number.isInteger(value) ? value : Number(value.toFixed(2));
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('ko-KR');
+}
+
+function formatSubmissionState(state) {
+  const labels = {
+    NEW: '미제출',
+    CREATED: '작성됨',
+    TURNED_IN: '제출됨',
+    RETURNED: '반환됨',
+    RECLAIMED_BY_STUDENT: '학생 회수',
+  };
+  return labels[state] ?? state ?? '-';
 }
 
 function clampRecommendation(score, levels) {
@@ -255,6 +274,10 @@ function App() {
   const [selectedGoogleCourseWorkId, setSelectedGoogleCourseWorkId] = useState('');
   const [googleCourseWorkStatus, setGoogleCourseWorkStatus] = useState('');
   const [googleCourseWorkLoading, setGoogleCourseWorkLoading] = useState(false);
+  const [googleStudentSubmissions, setGoogleStudentSubmissions] = useState([]);
+  const [selectedGoogleSubmissionId, setSelectedGoogleSubmissionId] = useState('');
+  const [googleSubmissionsStatus, setGoogleSubmissionsStatus] = useState('');
+  const [googleSubmissionsLoading, setGoogleSubmissionsLoading] = useState(false);
   const [googleAuthStatus, setGoogleAuthStatus] = useState('');
   const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
   const [studentWorkText, setStudentWorkText] = useState('');
@@ -294,6 +317,8 @@ function App() {
     setSelectedGoogleCourseId(saved.selectedGoogleCourseId ?? '');
     setGoogleCourseWork(saved.googleCourseWork ?? []);
     setSelectedGoogleCourseWorkId(saved.selectedGoogleCourseWorkId ?? '');
+    setGoogleStudentSubmissions(saved.googleStudentSubmissions ?? []);
+    setSelectedGoogleSubmissionId(saved.selectedGoogleSubmissionId ?? '');
     setStudentWorkText(saved.studentWorkText ?? '');
     setStudentImageMap(saved.studentImageMap ?? {});
     setUnmatchedImageFiles(saved.unmatchedImageFiles ?? []);
@@ -325,6 +350,8 @@ function App() {
         selectedGoogleCourseId,
         googleCourseWork,
         selectedGoogleCourseWorkId,
+        googleStudentSubmissions,
+        selectedGoogleSubmissionId,
         studentWorkText,
         studentImageMap,
         unmatchedImageFiles,
@@ -353,6 +380,8 @@ function App() {
     selectedGoogleCourseId,
     googleCourseWork,
     selectedGoogleCourseWorkId,
+    googleStudentSubmissions,
+    selectedGoogleSubmissionId,
     studentWorkText,
     studentImageMap,
     unmatchedImageFiles,
@@ -420,6 +449,9 @@ function App() {
   const selectedGoogleCourseWork = useMemo(() => {
     return googleCourseWork.find((courseWork) => courseWork.id === selectedGoogleCourseWorkId) ?? null;
   }, [googleCourseWork, selectedGoogleCourseWorkId]);
+  const selectedGoogleSubmission = useMemo(() => {
+    return googleStudentSubmissions.find((submission) => submission.id === selectedGoogleSubmissionId) ?? null;
+  }, [googleStudentSubmissions, selectedGoogleSubmissionId]);
 
   const visibleStudentList = useMemo(() => {
     if (!showUngradedOnly && !hideCompleted) return studentList;
@@ -1118,6 +1150,98 @@ function App() {
       setGoogleCourseWorkStatus(error.message || '과제 목록을 불러오는 중 오류가 발생했습니다.');
     } finally {
       setGoogleCourseWorkLoading(false);
+    }
+  };
+
+  const loadGoogleClassroomSubmissions = async () => {
+    if (!isGoogleConnected) {
+      setGoogleSubmissionsStatus('먼저 Google Classroom을 연결해 주세요.');
+      return;
+    }
+    if (!selectedGoogleCourseId || !selectedGoogleCourseWorkId) {
+      setGoogleSubmissionsStatus('먼저 수업과 과제를 선택해 주세요.');
+      return;
+    }
+
+    setGoogleSubmissionsLoading(true);
+    setGoogleSubmissionsStatus('선택한 과제의 제출물을 불러오는 중입니다.');
+
+    try {
+      const submissions = [];
+      let pageToken = '';
+
+      do {
+        const params = new URLSearchParams({
+          pageSize: '100',
+        });
+        if (pageToken) params.set('pageToken', pageToken);
+
+        const response = await fetch(
+          `https://classroom.googleapis.com/v1/courses/${selectedGoogleCourseId}/courseWork/${selectedGoogleCourseWorkId}/studentSubmissions?${params.toString()}`,
+          {
+            headers: {
+              Authorization: `Bearer ${googleAccessToken}`,
+            },
+          }
+        );
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error?.message ?? '제출물 목록을 불러오지 못했습니다.');
+        }
+
+        submissions.push(...(data.studentSubmissions ?? []));
+        pageToken = data.nextPageToken ?? '';
+      } while (pageToken);
+
+      const profileMap = new Map();
+      const userIds = [...new Set(submissions.map((submission) => submission.userId).filter(Boolean))];
+      await Promise.all(
+        userIds.map(async (userId) => {
+          try {
+            const response = await fetch(`https://classroom.googleapis.com/v1/userProfiles/${userId}`, {
+              headers: {
+                Authorization: `Bearer ${googleAccessToken}`,
+              },
+            });
+            if (!response.ok) return;
+            const profile = await response.json();
+            profileMap.set(userId, profile.name?.fullName ?? profile.emailAddress ?? userId);
+          } catch {
+            profileMap.set(userId, userId);
+          }
+        })
+      );
+
+      const normalizedSubmissions = submissions.map((submission) => ({
+        id: submission.id,
+        courseId: submission.courseId,
+        courseWorkId: submission.courseWorkId,
+        userId: submission.userId,
+        studentName: profileMap.get(submission.userId) ?? submission.userId ?? '이름 없음',
+        state: submission.state ?? '',
+        late: Boolean(submission.late),
+        creationTime: submission.creationTime ?? '',
+        updateTime: submission.updateTime ?? '',
+        assignedGrade: submission.assignedGrade ?? null,
+        draftGrade: submission.draftGrade ?? null,
+        raw: submission,
+      }));
+
+      setGoogleStudentSubmissions(normalizedSubmissions);
+      setSelectedGoogleSubmissionId((current) => {
+        if (normalizedSubmissions.some((submission) => submission.id === current)) return current;
+        return normalizedSubmissions[0]?.id ?? '';
+      });
+      setGoogleSubmissionsStatus(
+        normalizedSubmissions.length > 0
+          ? `${normalizedSubmissions.length}개의 제출물을 불러왔습니다.`
+          : '선택한 과제에 제출물이 없습니다.'
+      );
+    } catch (error) {
+      setGoogleSubmissionsStatus(error.message || '제출물 목록을 불러오는 중 오류가 발생했습니다.');
+    } finally {
+      setGoogleSubmissionsLoading(false);
     }
   };
 
@@ -1969,6 +2093,9 @@ function App() {
                   setGoogleCourseWork([]);
                   setSelectedGoogleCourseWorkId('');
                   setGoogleCourseWorkStatus('');
+                  setGoogleStudentSubmissions([]);
+                  setSelectedGoogleSubmissionId('');
+                  setGoogleSubmissionsStatus('');
                 }}
                 disabled={googleCourses.length === 0}
               >
@@ -2008,7 +2135,12 @@ function App() {
               <span>과제 선택</span>
               <select
                 value={selectedGoogleCourseWorkId}
-                onChange={(event) => setSelectedGoogleCourseWorkId(event.target.value)}
+                onChange={(event) => {
+                  setSelectedGoogleCourseWorkId(event.target.value);
+                  setGoogleStudentSubmissions([]);
+                  setSelectedGoogleSubmissionId('');
+                  setGoogleSubmissionsStatus('');
+                }}
                 disabled={googleCourseWork.length === 0}
               >
                 <option value="">과제를 선택해 주세요</option>
@@ -2029,6 +2161,58 @@ function App() {
             )}
 
             {googleCourseWorkStatus && <p className="pdf-status">{googleCourseWorkStatus}</p>}
+
+            <div className="classroom-course-box">
+              <div>
+                <strong>제출물</strong>
+                <span>
+                  {selectedGoogleCourseWork
+                    ? `${selectedGoogleCourseWork.title} 제출물 ${googleStudentSubmissions.length}개`
+                    : '과제를 먼저 선택해 주세요.'}
+                </span>
+              </div>
+              <button
+                className="secondary-button"
+                onClick={loadGoogleClassroomSubmissions}
+                disabled={!isGoogleConnected || !selectedGoogleCourseId || !selectedGoogleCourseWorkId || googleSubmissionsLoading}
+              >
+                {googleSubmissionsLoading ? '불러오는 중' : '제출물 목록 불러오기'}
+              </button>
+            </div>
+
+            {googleStudentSubmissions.length > 0 && (
+              <div className="submission-list-box">
+                <div className="submission-list-head">
+                  <strong>제출 학생 목록</strong>
+                  <span>{googleStudentSubmissions.length}개</span>
+                </div>
+                <div className="submission-list">
+                  {googleStudentSubmissions.map((submission) => (
+                    <button
+                      className={selectedGoogleSubmissionId === submission.id ? 'selected' : ''}
+                      key={submission.id}
+                      type="button"
+                      onClick={() => setSelectedGoogleSubmissionId(submission.id)}
+                    >
+                      <strong>{submission.studentName}</strong>
+                      <span>{formatSubmissionState(submission.state)}</span>
+                      <small>{formatDateTime(submission.updateTime || submission.creationTime)}</small>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {selectedGoogleSubmission && (
+              <div className="selected-course-card">
+                <span>선택된 제출물:</span>
+                <strong>{selectedGoogleSubmission.studentName}</strong>
+                <span>상태: {formatSubmissionState(selectedGoogleSubmission.state)}</span>
+                <span>제출 시간: {formatDateTime(selectedGoogleSubmission.updateTime || selectedGoogleSubmission.creationTime)}</span>
+              </div>
+            )}
+
+            {googleSubmissionsStatus && <p className="pdf-status">{googleSubmissionsStatus}</p>}
 
             <div className="action-row">
               <button className="secondary-button" onClick={disconnectGoogleClassroom} disabled={!googleAccessToken}>

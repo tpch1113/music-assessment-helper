@@ -778,6 +778,72 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.submission-list-box {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #dce2d5;
+  border-radius: 8px;
+  background: #fbfcfa;
+  padding: 12px;
+}
+
+.submission-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.submission-list-head span {
+  color: #24506f;
+  font-weight: 900;
+}
+
+.submission-list {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.submission-list button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  min-height: 58px;
+  border: 1px solid #dce2d5;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #253746;
+  padding: 9px 11px;
+  text-align: left;
+}
+
+.submission-list button.selected {
+  border-color: #24506f;
+  background: #edf5fa;
+  box-shadow: inset 4px 0 0 #24506f;
+}
+
+.submission-list strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.submission-list span {
+  color: #287146;
+  font-size: 0.82rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.submission-list small {
+  grid-column: 1 / -1;
+  color: #667585;
+}
+
 .student-list-panel {
   position: sticky;
   top: 16px;
