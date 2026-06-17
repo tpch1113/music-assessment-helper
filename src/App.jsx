@@ -530,6 +530,8 @@ function App() {
   const [aiSummary, setAiSummary] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
+  const [aiStatus, setAiStatus] = useState('');
+  const [aiDebugText, setAiDebugText] = useState('');
 
   useEffect(() => {
     const saved = safeParse(localStorage.getItem(STORAGE_KEY), null);
@@ -2090,17 +2092,47 @@ function App() {
   };
 
   const runAiAssessment = async () => {
-    if (!apiKey.trim()) {
-      setAiError('설정 탭에서 OpenAI API Key를 먼저 입력해 주세요.');
-      return;
-    }
-    if (!studentWorkText.trim() && uploadedImages.length === 0) {
-      setAiError('학생 작품 텍스트를 입력하거나 작품 사진을 업로드해 주세요.');
-      return;
-    }
+    console.log('[AI Assessment] Button clicked', {
+      hasApiKey: Boolean(apiKey.trim()),
+      hasRubricText: Boolean(evaluationRubricText.trim()),
+      uploadedImageCount: uploadedImages.length,
+      hasStudentWorkText: Boolean(studentWorkText.trim()),
+      student,
+    });
 
     setAiLoading(true);
     setAiError('');
+    setAiDebugText('');
+    setAiStatus('AI 채점 요청 중...');
+
+    if (!apiKey.trim()) {
+      setAiStatus('OpenAI API Key가 없습니다.');
+      setAiError('설정 탭에서 OpenAI API Key를 먼저 입력해 주세요.');
+      setAiLoading(false);
+      console.warn('[AI Assessment] Missing OpenAI API key');
+      return;
+    }
+    if (!evaluationRubricText.trim()) {
+      setAiStatus('채점 기준표가 없습니다.');
+      setAiError('채점 기준표 PDF를 업로드하거나 채점 기준표 텍스트를 입력해 주세요.');
+      setAiLoading(false);
+      console.warn('[AI Assessment] Missing evaluation rubric text');
+      return;
+    }
+    if (!studentWorkText.trim() && uploadedImages.length === 0) {
+      setAiStatus('학생 이미지나 텍스트가 없습니다.');
+      setAiError('학생 작품 텍스트를 입력하거나 작품 사진을 업로드해 주세요.');
+      setAiLoading(false);
+      console.warn('[AI Assessment] Missing student work text and images');
+      return;
+    }
+    if (!student.name?.trim()) {
+      setAiStatus('선택된 학생이 없습니다.');
+      setAiError('채점할 학생을 먼저 선택해 주세요.');
+      setAiLoading(false);
+      console.warn('[AI Assessment] Missing selected student');
+      return;
+    }
 
     const schema = {
       type: 'object',
@@ -2127,6 +2159,13 @@ function App() {
     };
 
     try {
+      console.log('[AI Assessment] Sending request to OpenAI', {
+        model: apiModel.trim() || 'gpt-4o-mini',
+        rubricLength: evaluationRubricText.length,
+        studentWorkLength: studentWorkText.length,
+        uploadedImageCount: uploadedImages.length,
+      });
+
       const userContent = [
         {
           type: 'input_text',
@@ -2179,12 +2218,23 @@ function App() {
         }),
       });
 
-      const data = await response.json();
+      const responseText = await response.text();
+      setAiDebugText(responseText.slice(0, 4000));
+      console.log('[AI Assessment] Raw OpenAI response', responseText);
+
+      let data = {};
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch (parseError) {
+        throw new Error(`OpenAI 응답을 JSON으로 읽지 못했습니다: ${parseError.message}`);
+      }
+
       if (!response.ok) {
         throw new Error(data.error?.message ?? 'AI 추천을 가져오지 못했습니다.');
       }
 
       const parsed = JSON.parse(getResponseText(data));
+      console.log('[AI Assessment] Parsed recommendation', parsed);
       const normalizedSuggestions = parsed.suggestions
         .map((suggestion) => {
           const area = rubric.areas.find((item) => item.id === suggestion.areaId);
@@ -2203,7 +2253,10 @@ function App() {
       setAiSummary(parsed.summary ?? '');
       setAiFeedbackDraft(normalizeSentence(parsed.feedbackDraft ?? ''));
       setAiSuggestions(normalizedSuggestions);
+      setAiStatus('AI 채점 완료');
     } catch (error) {
+      console.error('[AI Assessment] Request failed', error);
+      setAiStatus(`OpenAI 응답 오류: ${error.message || '알 수 없는 오류'}`);
       setAiError(error.message || 'AI 추천 중 오류가 발생했습니다.');
     } finally {
       setAiLoading(false);
@@ -2857,7 +2910,14 @@ function App() {
               />
             </label>
 
+            {aiStatus && <div className="ai-status-box">{aiStatus}</div>}
             {aiError && <div className="error-box">{aiError}</div>}
+            {aiDebugText && (
+              <details className="debug-json-box">
+                <summary>OpenAI 응답 디버그 보기</summary>
+                <pre>{aiDebugText}</pre>
+              </details>
+            )}
 
             <div className="ai-help">
               <strong>사용 안내</strong>

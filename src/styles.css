@@ -731,6 +731,15 @@ textarea:focus {
   font-weight: 800;
 }
 
+.ai-status-box {
+  margin-top: 14px;
+  border-radius: 8px;
+  background: #edf5fa;
+  color: #24506f;
+  font-weight: 900;
+  padding: 14px;
+}
+
 .ai-result-list {
   display: grid;
   gap: 12px;
