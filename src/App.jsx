@@ -8,6 +8,7 @@ const GOOGLE_IDENTITY_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 const SHEETJS_SCRIPT_URL = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
 const JSPDF_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';
 const assessmentPresets = ['세계 민요 총괄평가', '음악 프로젝트 수행평가', '작곡 수행평가'];
+const classOptions = Array.from({ length: 8 }, (_, index) => String(index + 1));
 const GOOGLE_CLASSROOM_LOGIN_SCOPE = [
   'openid',
   'email',
@@ -239,6 +240,11 @@ function normalizeClassName(value) {
   return normalizeStudentPart(match[0]);
 }
 
+function normalizeSelectableClassName(value) {
+  const className = normalizeClassName(value);
+  return classOptions.includes(className) ? className : '1';
+}
+
 function normalizeMatchText(value) {
   return String(value ?? '').trim().replace(/\s+/g, '').toLowerCase();
 }
@@ -270,7 +276,7 @@ function makeRosterClassKey(grade, className) {
 function normalizeClassContext(grade, className, assessmentTitle) {
   return {
     grade: normalizeStudentPart(grade),
-    className: normalizeClassName(className),
+    className: normalizeSelectableClassName(className),
     assessmentTitle: String(assessmentTitle ?? '').trim() || '음악 프로젝트 수행평가',
   };
 }
@@ -795,28 +801,6 @@ function App() {
     return makeRosterClassKey(currentClassContext.grade, currentClassContext.className);
   }, [currentClassContext]);
   const currentMasterRoster = masterRosterByClass[currentRosterClassKey] ?? [];
-  const availableClassOptions = useMemo(() => {
-    const classes = new Set();
-    Object.values(masterRosterByClass).forEach((students) => {
-      (students ?? []).forEach((item) => {
-        if (normalizeStudentPart(item.grade) === currentClassContext.grade) {
-          const className = normalizeClassName(item.className);
-          if (className) classes.add(className);
-        }
-      });
-    });
-    Object.values(studentListsByContext).forEach((students) => {
-      (students ?? []).forEach((item) => {
-        if (normalizeStudentPart(item.grade) === currentClassContext.grade) {
-          const className = normalizeClassName(item.className);
-          if (className) classes.add(className);
-        }
-      });
-    });
-    if (currentClassContext.className) classes.add(currentClassContext.className);
-    return [...classes].sort((a, b) => Number(a) - Number(b));
-  }, [currentClassContext, masterRosterByClass, studentListsByContext]);
-
   const currentStudentKey = studentKey(student);
   const currentMemoKey = `${currentClassContextKey}|${currentStudentKey}`;
   const currentTeacherEvidenceMemo = teacherMemoByStudent[currentMemoKey] ?? '';
@@ -2705,19 +2689,16 @@ function App() {
 
                 <label className="field">
                   <span>반</span>
-                  <input
-                    list="class-options"
+                  <select
                     value={selectedClassName}
-                    onChange={(event) => setSelectedClassName(normalizeClassName(event.target.value))}
-                    placeholder="7"
-                  />
-                  <datalist id="class-options">
-                    {availableClassOptions.map((className) => (
+                    onChange={(event) => setSelectedClassName(normalizeSelectableClassName(event.target.value))}
+                  >
+                    {classOptions.map((className) => (
                       <option key={className} value={className}>
                         {className}반
                       </option>
                     ))}
-                  </datalist>
+                  </select>
                 </label>
 
                 <label className="field">
