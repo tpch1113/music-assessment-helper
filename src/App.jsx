@@ -524,6 +524,7 @@ function App() {
   const [studentImageMap, setStudentImageMap] = useState({});
   const [unmatchedImageFiles, setUnmatchedImageFiles] = useState([]);
   const [uploadedImages, setUploadedImages] = useState([]);
+  const [selectedUploadedImageIds, setSelectedUploadedImageIds] = useState([]);
   const [imageUploadStatus, setImageUploadStatus] = useState('');
   const [aiSuggestions, setAiSuggestions] = useState([]);
   const [aiFeedbackDraft, setAiFeedbackDraft] = useState('');
@@ -607,6 +608,7 @@ function App() {
     setEvaluationRubricText(saved.evaluationRubricText ?? '');
     setStudentImageMap(saved.studentImageMap ?? {});
     setUnmatchedImageFiles(saved.unmatchedImageFiles ?? []);
+    setSelectedUploadedImageIds(saved.selectedUploadedImageIds ?? []);
     setAiSuggestions(saved.aiSuggestions ?? []);
     setAiFeedbackDraft(saved.aiFeedbackDraft ?? '');
     setAiSummary(saved.aiSummary ?? '');
@@ -648,6 +650,7 @@ function App() {
         evaluationRubricText,
         studentImageMap,
         unmatchedImageFiles,
+        selectedUploadedImageIds,
         aiSuggestions,
         aiFeedbackDraft,
         aiSummary,
@@ -686,6 +689,7 @@ function App() {
     evaluationRubricText,
     studentImageMap,
     unmatchedImageFiles,
+    selectedUploadedImageIds,
     aiSuggestions,
     aiFeedbackDraft,
     aiSummary,
@@ -847,6 +851,10 @@ function App() {
     return studentList.find((item) => item.id === manualGoogleStudentId) ?? null;
   }, [manualGoogleStudentId, studentList]);
   const googleAiTargetStudent = autoMatchedGoogleStudent ?? manualGoogleStudent;
+  const selectedUploadedImages = useMemo(() => {
+    const selectedIds = new Set(selectedUploadedImageIds);
+    return uploadedImages.filter((image) => selectedIds.has(image.id));
+  }, [selectedUploadedImageIds, uploadedImages]);
 
   const visibleStudentList = useMemo(() => {
     if (!showUngradedOnly && !hideCompleted) return studentList;
@@ -986,6 +994,14 @@ function App() {
     setTeacherMemo(existing?.teacherMemo ?? '');
   }, [autoMatchedGoogleStudent, resultMap, student]);
 
+  useEffect(() => {
+    if (!currentNormalizedStudentKey) return;
+    setStudentImageMap((current) => ({
+      ...current,
+      [currentNormalizedStudentKey]: selectedUploadedImages,
+    }));
+  }, [currentNormalizedStudentKey, selectedUploadedImages]);
+
   const resetAssessmentForm = () => {
     setStudent(emptyStudent);
     setScores({});
@@ -1005,7 +1021,9 @@ function App() {
     setAiSummary(existing?.aiSummary ?? '');
     setPdfFileName('');
     setPdfExtractStatus('');
-    setUploadedImages(studentImageMap[normalizedStudentKey(targetStudent)] ?? existing?.uploadedImages ?? []);
+    const nextImages = studentImageMap[normalizedStudentKey(targetStudent)] ?? existing?.uploadedImages ?? [];
+    setUploadedImages(nextImages);
+    setSelectedUploadedImageIds(nextImages.map((image) => image.id));
     setImageUploadStatus('');
     setActiveTab(targetTab);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1511,6 +1529,7 @@ function App() {
       );
 
       setUploadedImages((current) => [...current, ...images]);
+      setSelectedUploadedImageIds((current) => [...new Set([...current, ...images.map((image) => image.id)])]);
       setImageUploadStatus(`${images.length}장의 이미지를 추가했습니다.`);
     } catch {
       setImageUploadStatus('이미지를 불러오지 못했습니다. 다시 시도해 주세요.');
@@ -1571,6 +1590,7 @@ function App() {
 
       if (currentNormalizedStudentKey && nextMap[currentNormalizedStudentKey]) {
         setUploadedImages(nextMap[currentNormalizedStudentKey]);
+        setSelectedUploadedImageIds(nextMap[currentNormalizedStudentKey].map((image) => image.id));
       }
     } catch {
       setImageUploadStatus('이미지를 불러오지 못했습니다. 다시 시도해 주세요.');
@@ -1581,6 +1601,7 @@ function App() {
 
   const removeUploadedImage = (imageId) => {
     setUploadedImages((current) => current.filter((image) => image.id !== imageId));
+    setSelectedUploadedImageIds((current) => current.filter((id) => id !== imageId));
     if (currentNormalizedStudentKey) {
       setStudentImageMap((current) => ({
         ...current,
@@ -1591,10 +1612,25 @@ function App() {
 
   const clearUploadedImages = () => {
     setUploadedImages([]);
+    setSelectedUploadedImageIds([]);
     setImageUploadStatus('');
     if (currentNormalizedStudentKey) {
       setStudentImageMap((current) => ({ ...current, [currentNormalizedStudentKey]: [] }));
     }
+  };
+
+  const toggleUploadedImageSelection = (image) => {
+    setSelectedUploadedImageIds((current) => {
+      const selected = current.includes(image.id);
+      const next = selected ? current.filter((id) => id !== image.id) : [...current, image.id];
+      console.log('[AI Image Selection]', {
+        fileName: image.name,
+        selected: !selected,
+        uploadedImagesCount: uploadedImages.length,
+        selectedImagesCount: next.length,
+      });
+      return next;
+    });
   };
 
   const clearUnmatchedImageFiles = () => {
@@ -1699,6 +1735,7 @@ function App() {
         studentImageMap: {},
         unmatchedImageFiles: [],
         uploadedImages: [],
+        selectedUploadedImageIds: [],
         aiSuggestions: [],
         aiFeedbackDraft: '',
         aiSummary: '',
@@ -2027,6 +2064,7 @@ function App() {
 
       setGoogleSubmissionImages(images);
       setUploadedImages(images);
+      setSelectedUploadedImageIds(images.map((image) => image.id));
       if (currentNormalizedStudentKey) {
         setStudentImageMap((current) => ({
           ...current,
@@ -2081,6 +2119,7 @@ function App() {
     setAiFeedbackDraft(existing?.aiFeedbackDraft ?? '');
     setAiSummary(existing?.aiSummary ?? '');
     setUploadedImages(images);
+    setSelectedUploadedImageIds(images.map((image) => image.id));
     setStudentImageMap((current) => ({
       ...current,
       [normalizedKey]: images,
@@ -2096,6 +2135,7 @@ function App() {
       hasApiKey: Boolean(apiKey.trim()),
       hasRubricText: Boolean(evaluationRubricText.trim()),
       uploadedImageCount: uploadedImages.length,
+      selectedImageCount: selectedUploadedImages.length,
       hasStudentWorkText: Boolean(studentWorkText.trim()),
       student,
     });
@@ -2119,11 +2159,11 @@ function App() {
       console.warn('[AI Assessment] Missing evaluation rubric text');
       return;
     }
-    if (!studentWorkText.trim() && uploadedImages.length === 0) {
+    if (!studentWorkText.trim() && selectedUploadedImages.length === 0) {
       setAiStatus('학생 이미지나 텍스트가 없습니다.');
-      setAiError('학생 작품 텍스트를 입력하거나 작품 사진을 업로드해 주세요.');
+      setAiError('학생 작품 텍스트를 입력하거나 작품 사진을 선택해 주세요.');
       setAiLoading(false);
-      console.warn('[AI Assessment] Missing student work text and images');
+      console.warn('[AI Assessment] Missing student work text and selected images');
       return;
     }
     if (!student.name?.trim()) {
@@ -2164,6 +2204,7 @@ function App() {
         rubricLength: evaluationRubricText.length,
         studentWorkLength: studentWorkText.length,
         uploadedImageCount: uploadedImages.length,
+        selectedImageCount: selectedUploadedImages.length,
       });
 
       const userContent = [
@@ -2178,11 +2219,12 @@ function App() {
               '이번 수행평가는 세계 민요 총괄평가이며 Criterion A 조사하기 50점, Criterion D 평가하기 50점 기준으로 채점한다. 업로드된 채점 기준표 PDF 텍스트가 있으면 그 내용을 우선 근거로 삼고, 앱의 평가기준과 함께 비교한다.',
             studentWorkText,
             uploadedImageCount: uploadedImages.length,
+            selectedImageCount: selectedUploadedImages.length,
             instruction:
               '첨부 이미지가 있으면 사진 속 글과 시각 자료를 학생 작품 내용으로 읽고 평가하라. 단순 OCR 결과만 나열하지 말고, 읽어낸 내용을 현재 평가기준과 채점 기준표 PDF 텍스트와 비교해 점수와 이유를 판단하라. 텍스트 입력, 이미지, 채점 기준표 PDF 텍스트가 모두 있으면 셋을 함께 근거로 삼아라. 각 세부 기준마다 추천 점수를 하나 고르고 reason을 한국어로 작성하라. recommendedScore는 해당 기준의 levels 중 하나에 가까운 점수로 제안하라. feedbackDraft는 학생의 강점과 보완점을 포함하되 "~함." 문체로 작성하라.',
           }),
         },
-        ...uploadedImages.map((image) => ({
+        ...selectedUploadedImages.map((image) => ({
           type: 'input_image',
           image_url: image.dataUrl,
         })),
@@ -2880,13 +2922,26 @@ function App() {
 
               {uploadedImages.length > 0 && (
                 <>
+                  <p className="selected-image-count">선택된 이미지: {selectedUploadedImages.length}장</p>
                   <div className="image-preview-grid">
                     {uploadedImages.map((image) => (
-                      <figure className="image-preview-card" key={image.id}>
+                      <figure
+                        className={`image-preview-card ${
+                          selectedUploadedImageIds.includes(image.id) ? 'selected' : ''
+                        }`}
+                        key={image.id}
+                        onClick={() => toggleUploadedImageSelection(image)}
+                      >
                         <img src={image.dataUrl} alt={image.name} />
                         <figcaption>
                           <span>{image.name}</span>
-                          <button type="button" onClick={() => removeUploadedImage(image.id)}>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              removeUploadedImage(image.id);
+                            }}
+                          >
                             삭제
                           </button>
                         </figcaption>
@@ -2929,6 +2984,25 @@ function App() {
           </div>
 
           <div className="panel">
+            {selectedUploadedImages.length > 0 && (
+              <div className="selected-image-preview-box">
+                <div className="submission-list-head">
+                  <strong>선택된 이미지 미리보기</strong>
+                  <span>{selectedUploadedImages.length}장</span>
+                </div>
+                <div className="selected-image-preview-grid">
+                  {selectedUploadedImages.map((image) => (
+                    <figure className="image-preview-card selected" key={image.id}>
+                      <img src={image.dataUrl} alt={image.name} />
+                      <figcaption>
+                        <span>{image.name}</span>
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="panel-heading">
               <div>
                 <p className="eyebrow">추천 결과</p>
