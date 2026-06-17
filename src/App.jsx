@@ -335,16 +335,29 @@ function findHeaderIndex(headers, names) {
   return headers.findIndex((header) => names.includes(normalizeMatchText(header)));
 }
 
+function findStudentHeaderRow(rows) {
+  return rows.findIndex((row) => {
+    const normalized = row.map(normalizeMatchText);
+    const hasGrade = normalized.includes('학년') || normalized.includes('grade');
+    const hasClass = normalized.includes('반') || normalized.includes('class') || normalized.includes('학급');
+    const hasNumber = normalized.includes('번호') || normalized.includes('number') || normalized.includes('번');
+    const hasName =
+      normalized.includes('이름') ||
+      normalized.includes('성명') ||
+      normalized.includes('name') ||
+      normalized.includes('studentname');
+    return hasGrade && hasClass && hasNumber && hasName;
+  });
+}
+
 function rowsToStudents(rows, fallbackContext) {
   if (rows.length === 0) return [];
 
-  const firstRow = rows[0].map((cell) => String(cell ?? '').trim());
-  const normalizedHeaders = firstRow.map(normalizeMatchText);
-  const hasHeaders = ['학년', '반', '번호', '이름', '성명', 'email', '이메일'].some((header) =>
-    normalizedHeaders.includes(normalizeMatchText(header))
-  );
-  const headers = hasHeaders ? firstRow : [];
-  const bodyRows = hasHeaders ? rows.slice(1) : rows;
+  const headerRowIndex = findStudentHeaderRow(rows);
+  const hasHeaders = headerRowIndex >= 0;
+  const headerSource = hasHeaders ? rows[headerRowIndex] : rows[0];
+  const headers = hasHeaders ? headerSource.map((cell) => String(cell ?? '').trim()) : [];
+  const bodyRows = hasHeaders ? rows.slice(headerRowIndex + 1) : rows;
   const gradeIndex = hasHeaders ? findHeaderIndex(headers, ['학년', 'grade']) : 0;
   const classIndex = hasHeaders ? findHeaderIndex(headers, ['반', 'class', 'classname', '학급']) : 1;
   const numberIndex = hasHeaders ? findHeaderIndex(headers, ['번호', 'number', '번']) : 2;
