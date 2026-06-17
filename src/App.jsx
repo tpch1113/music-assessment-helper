@@ -350,6 +350,16 @@ function findStudentHeaderRow(rows) {
   });
 }
 
+function isInvalidStudentName(value) {
+  const name = String(value ?? '').trim();
+  const normalized = normalizeMatchText(name);
+  return (
+    !name ||
+    /^\d+$/.test(name) ||
+    ['성명', '이름', '번호', '반', '학년', '연번'].includes(normalized)
+  );
+}
+
 function rowsToStudents(rows, fallbackContext) {
   if (rows.length === 0) return [];
 
@@ -364,6 +374,8 @@ function rowsToStudents(rows, fallbackContext) {
   const nameIndex = hasHeaders ? findHeaderIndex(headers, ['이름', '성명', 'name', 'studentname']) : 3;
   const emailIndex = hasHeaders ? findHeaderIndex(headers, ['이메일', 'email', '메일', 'googleemail']) : 4;
 
+  const seen = new Set();
+
   return bodyRows
     .map((row) => {
       const grade = String(row[gradeIndex] ?? fallbackContext.grade ?? '').trim();
@@ -373,7 +385,20 @@ function rowsToStudents(rows, fallbackContext) {
       const email = emailIndex >= 0 ? String(row[emailIndex] ?? '').trim() : '';
       return { id: makeId(), grade, className, number, name, email };
     })
-    .filter((item) => item.grade && item.className && item.number && item.name);
+    .filter((item) => {
+      if (!item.grade || !item.className || !item.number || isInvalidStudentName(item.name)) return false;
+      if (['학년', '반', '번호', '번'].includes(normalizeMatchText(item.number))) return false;
+
+      const key = [
+        normalizeStudentPart(item.grade),
+        normalizeStudentPart(item.className),
+        normalizeStudentPart(item.number),
+        normalizeMatchText(item.name),
+      ].join('|');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 function readFileAsDataUrl(file) {
