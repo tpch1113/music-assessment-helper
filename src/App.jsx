@@ -514,6 +514,10 @@ function App() {
   const [googleAuthStatus, setGoogleAuthStatus] = useState('');
   const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
   const [studentWorkText, setStudentWorkText] = useState('');
+  const [evaluationRubricText, setEvaluationRubricText] = useState('');
+  const [rubricPdfFileName, setRubricPdfFileName] = useState('');
+  const [rubricPdfExtractStatus, setRubricPdfExtractStatus] = useState('');
+  const [rubricPdfExtracting, setRubricPdfExtracting] = useState(false);
   const [pdfFileName, setPdfFileName] = useState('');
   const [pdfExtractStatus, setPdfExtractStatus] = useState('');
   const [pdfExtracting, setPdfExtracting] = useState(false);
@@ -598,6 +602,7 @@ function App() {
     setSelectedGoogleSubmissionId(saved.selectedGoogleSubmissionId ?? '');
     setGoogleSubmissionImages(saved.googleSubmissionImages ?? []);
     setStudentWorkText(saved.studentWorkText ?? '');
+    setEvaluationRubricText(saved.evaluationRubricText ?? '');
     setStudentImageMap(saved.studentImageMap ?? {});
     setUnmatchedImageFiles(saved.unmatchedImageFiles ?? []);
     setAiSuggestions(saved.aiSuggestions ?? []);
@@ -638,6 +643,7 @@ function App() {
         selectedGoogleSubmissionId,
         googleSubmissionImages,
         studentWorkText,
+        evaluationRubricText,
         studentImageMap,
         unmatchedImageFiles,
         aiSuggestions,
@@ -675,6 +681,7 @@ function App() {
     selectedGoogleSubmissionId,
     googleSubmissionImages,
     studentWorkText,
+    evaluationRubricText,
     studentImageMap,
     unmatchedImageFiles,
     aiSuggestions,
@@ -1457,6 +1464,30 @@ function App() {
     }
   };
 
+  const handleRubricPdfUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setRubricPdfFileName(file.name);
+    setRubricPdfExtractStatus('채점 기준표 PDF 텍스트를 추출하는 중입니다.');
+    setRubricPdfExtracting(true);
+
+    try {
+      const extractedText = await extractTextFromPdf(file);
+      if (!extractedText) {
+        throw new Error('No text extracted');
+      }
+
+      setEvaluationRubricText(extractedText);
+      setRubricPdfExtractStatus('채점 기준표 텍스트를 AI 요청에 연결했습니다.');
+    } catch {
+      setRubricPdfExtractStatus('채점 기준표 텍스트 추출 실패, 직접 복사해 넣어주세요.');
+    } finally {
+      setRubricPdfExtracting(false);
+      event.target.value = '';
+    }
+  };
+
   const handleImageUpload = async (event) => {
     const files = Array.from(event.target.files ?? []);
     const imageFiles = files.filter((file) => ['image/jpeg', 'image/png', 'image/webp'].includes(file.type));
@@ -2061,7 +2092,6 @@ function App() {
   const runAiAssessment = async () => {
     if (!apiKey.trim()) {
       setAiError('설정 탭에서 OpenAI API Key를 먼저 입력해 주세요.');
-      setActiveTab('설정');
       return;
     }
     if (!studentWorkText.trim() && uploadedImages.length === 0) {
@@ -2104,10 +2134,13 @@ function App() {
             assessmentTitle: rubric.title,
             student,
             rubric: rubricForAi,
+            evaluationRubricText,
+            defaultAssessmentGuide:
+              '이번 수행평가는 세계 민요 총괄평가이며 Criterion A 조사하기 50점, Criterion D 평가하기 50점 기준으로 채점한다. 업로드된 채점 기준표 PDF 텍스트가 있으면 그 내용을 우선 근거로 삼고, 앱의 평가기준과 함께 비교한다.',
             studentWorkText,
             uploadedImageCount: uploadedImages.length,
             instruction:
-              '첨부 이미지가 있으면 사진 속 글과 시각 자료를 학생 작품 내용으로 읽고 평가하라. 단순 OCR 결과만 나열하지 말고, 읽어낸 내용을 현재 평가기준과 비교해 점수와 이유를 판단하라. 텍스트 입력과 이미지가 모두 있으면 둘을 함께 근거로 삼아라. 각 세부 기준마다 추천 점수를 하나 고르고 reason을 한국어로 작성하라. recommendedScore는 해당 기준의 levels 중 하나에 가까운 점수로 제안하라. feedbackDraft는 학생의 강점과 보완점을 포함하되 "~함." 문체로 작성하라.',
+              '첨부 이미지가 있으면 사진 속 글과 시각 자료를 학생 작품 내용으로 읽고 평가하라. 단순 OCR 결과만 나열하지 말고, 읽어낸 내용을 현재 평가기준과 채점 기준표 PDF 텍스트와 비교해 점수와 이유를 판단하라. 텍스트 입력, 이미지, 채점 기준표 PDF 텍스트가 모두 있으면 셋을 함께 근거로 삼아라. 각 세부 기준마다 추천 점수를 하나 고르고 reason을 한국어로 작성하라. recommendedScore는 해당 기준의 levels 중 하나에 가까운 점수로 제안하라. feedbackDraft는 학생의 강점과 보완점을 포함하되 "~함." 문체로 작성하라.',
           }),
         },
         ...uploadedImages.map((image) => ({
@@ -2128,7 +2161,7 @@ function App() {
             {
               role: 'system',
               content:
-                '너는 중학교 음악 수행평가 채점 보조자다. 교사가 만든 평가기준과 학생 작품 텍스트 또는 작품 사진을 비교하여 점수 추천과 이유를 제안한다. 사진이 들어오면 OCR처럼 글자만 옮기지 말고, 사진 속 학생 작품 내용을 읽고 이해한 뒤 평가기준에 맞춰 판단한다. 최종 점수는 교사가 결정하므로 단정하지 말고 근거 중심으로 작성한다. 모든 피드백 문장은 생활기록부에 어울리는 "~함." 문체로 쓴다.',
+                '너는 중학교 음악 수행평가 채점 보조자다. 이번 수행평가는 세계 민요 총괄평가이며 Criterion A 조사하기 50점, Criterion D 평가하기 50점 기준을 기본으로 본다. 교사가 만든 평가기준, 업로드한 채점 기준표 PDF 텍스트, 학생 작품 텍스트 또는 작품 사진을 비교하여 점수 추천과 이유를 제안한다. 사진이 들어오면 OCR처럼 글자만 옮기지 말고, 사진 속 학생 작품 내용을 읽고 이해한 뒤 평가기준에 맞춰 판단한다. 최종 점수는 교사가 결정하므로 단정하지 말고 근거 중심으로 작성한다. 모든 피드백 문장은 생활기록부에 어울리는 "~함." 문체로 쓴다.',
             },
             {
               role: 'user',
@@ -2681,6 +2714,11 @@ function App() {
               <span>{rubric.title}</span>
             </div>
 
+            <div className="ai-help">
+              <strong>세계 민요 총괄평가 기본 기준</strong>
+              <p>Criterion A 조사하기 50점, Criterion D 평가하기 50점 기준으로 AI가 보조 판단합니다.</p>
+            </div>
+
             <div className="bulk-image-box">
               <div className="image-upload-head">
                 <div>
@@ -2718,6 +2756,38 @@ function App() {
                 </div>
               )}
             </div>
+
+            <div className="pdf-upload-box">
+              <div>
+                <strong>채점 기준표 PDF 업로드</strong>
+                <span>평가기준 PDF를 선택하면 텍스트를 추출해 AI 점수 추천 요청에 함께 보냅니다.</span>
+              </div>
+              <label className="file-button">
+                기준표 PDF 선택
+                <input
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  onChange={handleRubricPdfUpload}
+                  disabled={rubricPdfExtracting}
+                />
+              </label>
+              {(rubricPdfFileName || rubricPdfExtractStatus) && (
+                <p className={rubricPdfExtractStatus.startsWith('채점 기준표 텍스트 추출 실패') ? 'pdf-status error' : 'pdf-status'}>
+                  {rubricPdfFileName && `${rubricPdfFileName} - `}
+                  {rubricPdfExtractStatus}
+                </p>
+              )}
+            </div>
+
+            <label className="field">
+              <span>채점 기준표 텍스트</span>
+              <textarea
+                className="rubric-textarea"
+                value={evaluationRubricText}
+                onChange={(event) => setEvaluationRubricText(event.target.value)}
+                placeholder="채점 기준표 PDF에서 추출한 내용이 여기에 들어갑니다. 필요하면 직접 붙여넣거나 수정할 수 있습니다."
+              />
+            </label>
 
             <div className="pdf-upload-box">
               <div>

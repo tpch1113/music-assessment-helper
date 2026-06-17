@@ -479,6 +479,11 @@ textarea:focus {
   line-height: 1.7;
 }
 
+.rubric-textarea {
+  min-height: 180px;
+  line-height: 1.7;
+}
+
 .student-mini {
   display: flex;
   justify-content: space-between;
