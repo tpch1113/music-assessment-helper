@@ -10,6 +10,7 @@ const GOOGLE_CLASSROOM_LOGIN_SCOPE = [
   'email',
   'profile',
   'https://www.googleapis.com/auth/classroom.courses.readonly',
+  'https://www.googleapis.com/auth/classroom.coursework.students.readonly',
 ].join(' ');
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -250,6 +251,10 @@ function App() {
   const [selectedGoogleCourseId, setSelectedGoogleCourseId] = useState('');
   const [googleCoursesStatus, setGoogleCoursesStatus] = useState('');
   const [googleCoursesLoading, setGoogleCoursesLoading] = useState(false);
+  const [googleCourseWork, setGoogleCourseWork] = useState([]);
+  const [selectedGoogleCourseWorkId, setSelectedGoogleCourseWorkId] = useState('');
+  const [googleCourseWorkStatus, setGoogleCourseWorkStatus] = useState('');
+  const [googleCourseWorkLoading, setGoogleCourseWorkLoading] = useState(false);
   const [googleAuthStatus, setGoogleAuthStatus] = useState('');
   const [googleAuthLoading, setGoogleAuthLoading] = useState(false);
   const [studentWorkText, setStudentWorkText] = useState('');
@@ -287,6 +292,8 @@ function App() {
     setGoogleClientId(saved.googleClientId ?? '');
     setGoogleCourses(saved.googleCourses ?? []);
     setSelectedGoogleCourseId(saved.selectedGoogleCourseId ?? '');
+    setGoogleCourseWork(saved.googleCourseWork ?? []);
+    setSelectedGoogleCourseWorkId(saved.selectedGoogleCourseWorkId ?? '');
     setStudentWorkText(saved.studentWorkText ?? '');
     setStudentImageMap(saved.studentImageMap ?? {});
     setUnmatchedImageFiles(saved.unmatchedImageFiles ?? []);
@@ -316,6 +323,8 @@ function App() {
         googleClientId,
         googleCourses,
         selectedGoogleCourseId,
+        googleCourseWork,
+        selectedGoogleCourseWorkId,
         studentWorkText,
         studentImageMap,
         unmatchedImageFiles,
@@ -342,6 +351,8 @@ function App() {
     googleClientId,
     googleCourses,
     selectedGoogleCourseId,
+    googleCourseWork,
+    selectedGoogleCourseWorkId,
     studentWorkText,
     studentImageMap,
     unmatchedImageFiles,
@@ -406,6 +417,9 @@ function App() {
   const selectedGoogleCourse = useMemo(() => {
     return googleCourses.find((course) => course.id === selectedGoogleCourseId) ?? null;
   }, [googleCourses, selectedGoogleCourseId]);
+  const selectedGoogleCourseWork = useMemo(() => {
+    return googleCourseWork.find((courseWork) => courseWork.id === selectedGoogleCourseWorkId) ?? null;
+  }, [googleCourseWork, selectedGoogleCourseWorkId]);
 
   const visibleStudentList = useMemo(() => {
     if (!showUngradedOnly && !hideCompleted) return studentList;
@@ -1036,6 +1050,74 @@ function App() {
       setGoogleCoursesStatus(error.message || '수업 목록을 불러오는 중 오류가 발생했습니다.');
     } finally {
       setGoogleCoursesLoading(false);
+    }
+  };
+
+  const loadGoogleClassroomCourseWork = async () => {
+    if (!isGoogleConnected) {
+      setGoogleCourseWorkStatus('먼저 Google Classroom을 연결해 주세요.');
+      return;
+    }
+    if (!selectedGoogleCourseId) {
+      setGoogleCourseWorkStatus('먼저 수업을 선택해 주세요.');
+      return;
+    }
+
+    setGoogleCourseWorkLoading(true);
+    setGoogleCourseWorkStatus('선택한 수업의 과제 목록을 불러오는 중입니다.');
+
+    try {
+      const courseWorkItems = [];
+      let pageToken = '';
+
+      do {
+        const params = new URLSearchParams({
+          pageSize: '100',
+          orderBy: 'updateTime desc',
+        });
+        if (pageToken) params.set('pageToken', pageToken);
+
+        const response = await fetch(
+          `https://classroom.googleapis.com/v1/courses/${selectedGoogleCourseId}/courseWork?${params.toString()}`,
+          {
+            headers: {
+              Authorization: `Bearer ${googleAccessToken}`,
+            },
+          }
+        );
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error?.message ?? '과제 목록을 불러오지 못했습니다.');
+        }
+
+        courseWorkItems.push(
+          ...(data.courseWork ?? []).map((courseWork) => ({
+            id: courseWork.id,
+            courseId: courseWork.courseId,
+            title: courseWork.title ?? '제목 없는 과제',
+            state: courseWork.state ?? '',
+            workType: courseWork.workType ?? '',
+            updateTime: courseWork.updateTime ?? '',
+          }))
+        );
+        pageToken = data.nextPageToken ?? '';
+      } while (pageToken);
+
+      setGoogleCourseWork(courseWorkItems);
+      setSelectedGoogleCourseWorkId((current) => {
+        if (courseWorkItems.some((courseWork) => courseWork.id === current)) return current;
+        return courseWorkItems[0]?.id ?? '';
+      });
+      setGoogleCourseWorkStatus(
+        courseWorkItems.length > 0
+          ? `${courseWorkItems.length}개의 과제를 불러왔습니다.`
+          : '선택한 수업에 과제가 없습니다.'
+      );
+    } catch (error) {
+      setGoogleCourseWorkStatus(error.message || '과제 목록을 불러오는 중 오류가 발생했습니다.');
+    } finally {
+      setGoogleCourseWorkLoading(false);
     }
   };
 
@@ -1882,7 +1964,12 @@ function App() {
               <span>수업 선택</span>
               <select
                 value={selectedGoogleCourseId}
-                onChange={(event) => setSelectedGoogleCourseId(event.target.value)}
+                onChange={(event) => {
+                  setSelectedGoogleCourseId(event.target.value);
+                  setGoogleCourseWork([]);
+                  setSelectedGoogleCourseWorkId('');
+                  setGoogleCourseWorkStatus('');
+                }}
                 disabled={googleCourses.length === 0}
               >
                 <option value="">수업을 선택해 주세요</option>
@@ -1902,6 +1989,46 @@ function App() {
             )}
 
             {googleCoursesStatus && <p className="pdf-status">{googleCoursesStatus}</p>}
+
+            <div className="classroom-course-box">
+              <div>
+                <strong>과제 목록</strong>
+                <span>{selectedGoogleCourse ? `${selectedGoogleCourse.name} 수업의 과제를 불러옵니다.` : '수업을 먼저 선택해 주세요.'}</span>
+              </div>
+              <button
+                className="secondary-button"
+                onClick={loadGoogleClassroomCourseWork}
+                disabled={!isGoogleConnected || !selectedGoogleCourseId || googleCourseWorkLoading}
+              >
+                {googleCourseWorkLoading ? '불러오는 중' : '과제 목록 불러오기'}
+              </button>
+            </div>
+
+            <label className="field">
+              <span>과제 선택</span>
+              <select
+                value={selectedGoogleCourseWorkId}
+                onChange={(event) => setSelectedGoogleCourseWorkId(event.target.value)}
+                disabled={googleCourseWork.length === 0}
+              >
+                <option value="">과제를 선택해 주세요</option>
+                {googleCourseWork.map((courseWork) => (
+                  <option key={courseWork.id} value={courseWork.id}>
+                    {courseWork.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {selectedGoogleCourseWork && (
+              <div className="selected-course-card">
+                <span>선택된 과제:</span>
+                <strong>{selectedGoogleCourseWork.title}</strong>
+                <span>courseWorkId: {selectedGoogleCourseWork.id}</span>
+              </div>
+            )}
+
+            {googleCourseWorkStatus && <p className="pdf-status">{googleCourseWorkStatus}</p>}
 
             <div className="action-row">
               <button className="secondary-button" onClick={disconnectGoogleClassroom} disabled={!googleAccessToken}>
