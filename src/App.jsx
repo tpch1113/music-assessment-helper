@@ -11,6 +11,7 @@ const GOOGLE_CLASSROOM_LOGIN_SCOPE = [
   'profile',
   'https://www.googleapis.com/auth/classroom.courses.readonly',
   'https://www.googleapis.com/auth/classroom.coursework.students.readonly',
+  'https://www.googleapis.com/auth/classroom.rosters.readonly',
   'https://www.googleapis.com/auth/classroom.profile.emails',
 ].join(' ');
 
@@ -1204,29 +1205,49 @@ function App() {
                 Authorization: `Bearer ${googleAccessToken}`,
               },
             });
-            if (!response.ok) return;
+            if (!response.ok) {
+              profileMap.set(userId, {
+                name: userId,
+                email: '',
+                lookupFailed: true,
+              });
+              return;
+            }
             const profile = await response.json();
-            profileMap.set(userId, profile.name?.fullName ?? profile.emailAddress ?? userId);
+            profileMap.set(userId, {
+              name: profile.name?.fullName || profile.name?.givenName || profile.emailAddress || userId,
+              email: profile.emailAddress ?? '',
+              lookupFailed: false,
+            });
           } catch {
-            profileMap.set(userId, userId);
+            profileMap.set(userId, {
+              name: userId,
+              email: '',
+              lookupFailed: true,
+            });
           }
         })
       );
 
-      const normalizedSubmissions = submissions.map((submission) => ({
-        id: submission.id,
-        courseId: submission.courseId,
-        courseWorkId: submission.courseWorkId,
-        userId: submission.userId,
-        studentName: profileMap.get(submission.userId) ?? submission.userId ?? '이름 없음',
-        state: submission.state ?? '',
-        late: Boolean(submission.late),
-        creationTime: submission.creationTime ?? '',
-        updateTime: submission.updateTime ?? '',
-        assignedGrade: submission.assignedGrade ?? null,
-        draftGrade: submission.draftGrade ?? null,
-        raw: submission,
-      }));
+      const normalizedSubmissions = submissions.map((submission) => {
+        const profile = profileMap.get(submission.userId);
+        return {
+          id: submission.id,
+          courseId: submission.courseId,
+          courseWorkId: submission.courseWorkId,
+          userId: submission.userId,
+          studentName: profile?.name ?? submission.userId ?? '이름 없음',
+          studentEmail: profile?.email ?? '',
+          profileLookupFailed: profile?.lookupFailed ?? true,
+          state: submission.state ?? '',
+          late: Boolean(submission.late),
+          creationTime: submission.creationTime ?? '',
+          updateTime: submission.updateTime ?? '',
+          assignedGrade: submission.assignedGrade ?? null,
+          draftGrade: submission.draftGrade ?? null,
+          raw: submission,
+        };
+      });
 
       setGoogleStudentSubmissions(normalizedSubmissions);
       setSelectedGoogleSubmissionId((current) => {
@@ -2196,6 +2217,7 @@ function App() {
                     >
                       <strong>{submission.studentName}</strong>
                       <span>{formatSubmissionState(submission.state)}</span>
+                      {submission.studentEmail && <em>{submission.studentEmail}</em>}
                       <small>{formatDateTime(submission.updateTime || submission.creationTime)}</small>
                     </button>
                   ))}
@@ -2207,6 +2229,7 @@ function App() {
               <div className="selected-course-card">
                 <span>선택된 제출물:</span>
                 <strong>{selectedGoogleSubmission.studentName}</strong>
+                {selectedGoogleSubmission.studentEmail && <span>{selectedGoogleSubmission.studentEmail}</span>}
                 <span>상태: {formatSubmissionState(selectedGoogleSubmission.state)}</span>
                 <span>제출 시간: {formatDateTime(selectedGoogleSubmission.updateTime || selectedGoogleSubmission.creationTime)}</span>
               </div>

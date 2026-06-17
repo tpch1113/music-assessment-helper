@@ -844,6 +844,14 @@ textarea:focus {
   color: #667585;
 }
 
+.submission-list em {
+  grid-column: 1 / -1;
+  color: #667585;
+  font-size: 0.82rem;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
 .student-list-panel {
   position: sticky;
   top: 16px;
