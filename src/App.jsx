@@ -3,9 +3,10 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 const STORAGE_KEY = 'music-assessment-helper-state';
-const tabs = ['기준표', '학생 목록', '채점', 'AI 보조', '결과', '설정'];
+const tabs = ['학생 목록', 'Classroom 제출물', '메모/내보내기', '설정'];
 const GOOGLE_IDENTITY_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 const SHEETJS_SCRIPT_URL = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+const JSPDF_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';
 const assessmentPresets = ['세계 민요 총괄평가', '음악 프로젝트 수행평가', '작곡 수행평가'];
 const GOOGLE_CLASSROOM_LOGIN_SCOPE = [
   'openid',
@@ -198,6 +199,29 @@ function loadSheetJsScript() {
   });
 }
 
+function loadJsPdfScript() {
+  return new Promise((resolve, reject) => {
+    if (window.jspdf?.jsPDF) {
+      resolve(window.jspdf.jsPDF);
+      return;
+    }
+
+    const existingScript = document.querySelector(`script[src="${JSPDF_SCRIPT_URL}"]`);
+    if (existingScript) {
+      existingScript.addEventListener('load', () => resolve(window.jspdf.jsPDF), { once: true });
+      existingScript.addEventListener('error', reject, { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = JSPDF_SCRIPT_URL;
+    script.async = true;
+    script.onload = () => resolve(window.jspdf.jsPDF);
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+}
+
 function studentKey(student) {
   return [student.className, student.number, student.name].map((item) => item.trim()).join('|');
 }
@@ -226,6 +250,13 @@ function slugify(value) {
     .replace(/[^a-z0-9가-힣_-]/g, '')
     .replace(/-+/g, '-');
   return slug || 'assessment';
+}
+
+function safeFileName(value) {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/[\\/:*?"<>|]/g, '');
 }
 
 function makeClassContextKey(grade, className, assessmentTitle) {
@@ -475,6 +506,8 @@ function App() {
   const [resultsByContext, setResultsByContext] = useState({});
   const [masterRosterByClass, setMasterRosterByClass] = useState({});
   const [masterRosterStatus, setMasterRosterStatus] = useState('');
+  const [teacherMemoByStudent, setTeacherMemoByStudent] = useState({});
+  const [exportStatus, setExportStatus] = useState('');
   const [studentImportStatus, setStudentImportStatus] = useState('');
   const [rubric, setRubric] = useState(defaultRubric);
   const [savedRubrics, setSavedRubrics] = useState([]);
@@ -580,6 +613,7 @@ function App() {
     setResultsByContext(migratedResults);
     const migratedMasterRoster = normalizeRosterMap(saved.masterRosterByClass ?? {});
     setMasterRosterByClass(migratedMasterRoster);
+    setTeacherMemoByStudent(saved.teacherMemoByStudent ?? {});
     loadedContextKeyRef.current = savedContextKey;
     setStudentList(
       migratedStudentLists[savedContextKey] ??
@@ -591,7 +625,7 @@ function App() {
     setScores(saved.scores ?? {});
     setTeacherMemo(saved.teacherMemo ?? '');
     setResults(migratedResults[savedContextKey] ?? []);
-    setActiveTab(saved.activeTab ?? '기준표');
+    setActiveTab(tabs.includes(saved.activeTab) ? saved.activeTab : '학생 목록');
     setShowUngradedOnly(saved.showUngradedOnly ?? false);
     setHideCompleted(saved.hideCompleted ?? false);
     setApiKey(saved.apiKey ?? '');
@@ -625,6 +659,7 @@ function App() {
         studentListsByContext,
         resultsByContext,
         masterRosterByClass,
+        teacherMemoByStudent,
         rubric,
         savedRubrics,
         selectedRubricId,
@@ -664,6 +699,7 @@ function App() {
     studentListsByContext,
     resultsByContext,
     masterRosterByClass,
+    teacherMemoByStudent,
     rubric,
     savedRubrics,
     selectedRubricId,
@@ -782,6 +818,8 @@ function App() {
   }, [currentClassContext, masterRosterByClass, studentListsByContext]);
 
   const currentStudentKey = studentKey(student);
+  const currentMemoKey = `${currentClassContextKey}|${currentStudentKey}`;
+  const currentTeacherEvidenceMemo = teacherMemoByStudent[currentMemoKey] ?? '';
   const currentNormalizedStudentKey = normalizedStudentKey(student);
   const isGoogleConnected = Boolean(googleAccessToken) && Date.now() < googleTokenExpiresAt;
   const selectedGoogleCourse = useMemo(() => {
@@ -2355,19 +2393,136 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
+  const addImagePageToPdf = (pdf, image) => {
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 12;
+    const imageWidth = pageWidth - margin * 2;
+    const imageHeight = pageHeight - margin * 2;
+    const format = image.type?.includes('png') ? 'PNG' : image.type?.includes('webp') ? 'WEBP' : 'JPEG';
+    pdf.addPage();
+    pdf.addImage(image.dataUrl, format, margin, margin, imageWidth, imageHeight, undefined, 'FAST');
+  };
+
+  const createStudentSubmissionPdf = async (targetStudent = student, images = selectedUploadedImages) => {
+    if (!targetStudent?.name) {
+      setExportStatus('PDF로 내보낼 학생을 선택해 주세요.');
+      return;
+    }
+    if (images.length === 0) {
+      setExportStatus('PDF로 내보낼 제출 이미지가 없습니다.');
+      return;
+    }
+
+    try {
+      setExportStatus('학생 제출물 PDF를 만드는 중입니다.');
+      const jsPDF = await loadJsPdfScript();
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const submittedAt = formatDateTime(selectedGoogleSubmission?.updateTime || selectedGoogleSubmission?.creationTime);
+
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(18);
+      pdf.text('음악 수행평가 제출물', 20, 28);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(12);
+      [
+        `학년: ${currentClassContext.grade}학년`,
+        `반: ${targetStudent.className}반`,
+        `번호: ${targetStudent.number}번`,
+        `이름: ${targetStudent.name}`,
+        `수행평가명: ${currentClassContext.assessmentTitle}`,
+        `제출 시간: ${submittedAt}`,
+      ].forEach((line, index) => pdf.text(line, 20, 48 + index * 9));
+
+      images.forEach((image) => addImagePageToPdf(pdf, image));
+
+      const fileName = `${currentClassContext.grade}학년_${targetStudent.className}반_${targetStudent.number}번_${safeFileName(
+        targetStudent.name
+      )}_${safeFileName(currentClassContext.assessmentTitle)}.pdf`;
+      pdf.save(fileName);
+      setExportStatus(`${fileName} 파일을 만들었습니다.`);
+    } catch (error) {
+      console.error('[PDF Export] Student PDF failed', error);
+      setExportStatus(error.message || '학생 제출물 PDF 생성 중 오류가 발생했습니다.');
+    }
+  };
+
+  const createClassSubmissionPdf = async () => {
+    try {
+      setExportStatus('현재 반 전체 제출물 PDF를 만드는 중입니다.');
+      const jsPDF = await loadJsPdfScript();
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const orderedStudents = [...studentList].sort((a, b) => Number(a.number) - Number(b.number));
+      let hasAnyImage = false;
+
+      orderedStudents.forEach((item, studentIndex) => {
+        const images = studentImageMap[normalizedStudentKey(item)] ?? [];
+        if (studentIndex > 0) pdf.addPage();
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(18);
+        pdf.text(`${item.className}반 ${item.number}번 ${item.name}`, 20, 32);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(12);
+        pdf.text(`수행평가명: ${currentClassContext.assessmentTitle}`, 20, 48);
+        pdf.text(`첨부 이미지: ${images.length}장`, 20, 57);
+
+        images.forEach((image) => {
+          hasAnyImage = true;
+          addImagePageToPdf(pdf, image);
+        });
+      });
+
+      if (!hasAnyImage) {
+        setExportStatus('현재 반에 PDF로 내보낼 제출 이미지가 없습니다.');
+        return;
+      }
+
+      const fileName = `${currentClassContext.grade}학년_${currentClassContext.className}반_${safeFileName(
+        currentClassContext.assessmentTitle
+      )}_전체제출물.pdf`;
+      pdf.save(fileName);
+      setExportStatus(`${fileName} 파일을 만들었습니다.`);
+    } catch (error) {
+      console.error('[PDF Export] Class PDF failed', error);
+      setExportStatus(error.message || '반 전체 제출물 PDF 생성 중 오류가 발생했습니다.');
+    }
+  };
+
+  const downloadTeacherMemoCsv = () => {
+    const rows = studentList
+      .slice()
+      .sort((a, b) => Number(a.number) - Number(b.number))
+      .map((item) => [
+        item.className,
+        item.number,
+        item.name,
+        teacherMemoByStudent[`${currentClassContextKey}|${studentKey(item)}`] ?? '',
+      ]);
+    const csv = [['반', '번호', '이름', '메모'], ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${currentClassContext.grade}학년_${currentClassContext.className}반_${safeFileName(
+      currentClassContext.assessmentTitle
+    )}_채점메모.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <main className="app-shell">
       <header className="topbar">
         <div>
           <p className="eyebrow">중학교 음악</p>
-          <h1>음악 수행평가 채점 도우미</h1>
+          <h1>음악 수행평가 제출물 정리 도구</h1>
           <p className="current-context">
             현재 작업: {currentClassContext.grade}학년 {currentClassContext.className}반 /{' '}
             {currentClassContext.assessmentTitle}
           </p>
         </div>
         <div className="score-pill">
-          <span>채점 진행</span>
+          <span>학생 목록</span>
           <strong>
             {completedCount} / {studentList.length || 0}
           </strong>
@@ -2642,6 +2797,283 @@ function App() {
             onSelect={selectStudent}
             onShowUngradedOnlyChange={setShowUngradedOnly}
           />
+        </section>
+      )}
+
+      {activeTab === 'Classroom 제출물' && (
+        <section className="two-column">
+          <div className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Google Classroom</p>
+                <h2>제출물 불러오기</h2>
+              </div>
+              <span className={isGoogleConnected ? 'done' : 'pending'}>{isGoogleConnected ? '연결됨' : '미연결'}</span>
+            </div>
+
+            <div className="classroom-course-box">
+              <div>
+                <strong>수업 목록</strong>
+                <span>{selectedGoogleCourse ? selectedGoogleCourse.name : '수업을 불러와 선택해 주세요.'}</span>
+              </div>
+              <button
+                className="secondary-button"
+                onClick={loadGoogleClassroomCourses}
+                disabled={!isGoogleConnected || googleCoursesLoading}
+              >
+                {googleCoursesLoading ? '불러오는 중' : '수업 목록 불러오기'}
+              </button>
+            </div>
+
+            <label className="field">
+              <span>수업 선택</span>
+              <select
+                value={selectedGoogleCourseId}
+                onChange={(event) => {
+                  setSelectedGoogleCourseId(event.target.value);
+                  setGoogleCourseWork([]);
+                  setSelectedGoogleCourseWorkId('');
+                  setGoogleStudentSubmissions([]);
+                  setSelectedGoogleSubmissionId('');
+                  setGoogleSubmissionImages([]);
+                }}
+                disabled={googleCourses.length === 0}
+              >
+                <option value="">수업을 선택해 주세요</option>
+                {googleCourses.map((course) => (
+                  <option key={course.id} value={course.id}>
+                    {course.section ? `${course.name} (${course.section})` : course.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="classroom-course-box">
+              <div>
+                <strong>과제 목록</strong>
+                <span>{selectedGoogleCourseWork ? selectedGoogleCourseWork.title : '과제를 불러와 선택해 주세요.'}</span>
+              </div>
+              <button
+                className="secondary-button"
+                onClick={loadGoogleClassroomCourseWork}
+                disabled={!isGoogleConnected || !selectedGoogleCourseId || googleCourseWorkLoading}
+              >
+                {googleCourseWorkLoading ? '불러오는 중' : '과제 목록 불러오기'}
+              </button>
+            </div>
+
+            <label className="field">
+              <span>과제 선택</span>
+              <select
+                value={selectedGoogleCourseWorkId}
+                onChange={(event) => {
+                  setSelectedGoogleCourseWorkId(event.target.value);
+                  setGoogleStudentSubmissions([]);
+                  setSelectedGoogleSubmissionId('');
+                  setGoogleSubmissionImages([]);
+                }}
+                disabled={googleCourseWork.length === 0}
+              >
+                <option value="">과제를 선택해 주세요</option>
+                {googleCourseWork.map((courseWork) => (
+                  <option key={courseWork.id} value={courseWork.id}>
+                    {courseWork.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="classroom-course-box">
+              <div>
+                <strong>제출물</strong>
+                <span>{googleStudentSubmissions.length}개 제출물</span>
+              </div>
+              <button
+                className="secondary-button"
+                onClick={loadGoogleClassroomSubmissions}
+                disabled={!isGoogleConnected || !selectedGoogleCourseId || !selectedGoogleCourseWorkId || googleSubmissionsLoading}
+              >
+                {googleSubmissionsLoading ? '불러오는 중' : '제출물 목록 불러오기'}
+              </button>
+            </div>
+
+            {(googleCoursesStatus || googleCourseWorkStatus || googleSubmissionsStatus) && (
+              <p className="pdf-status">{googleSubmissionsStatus || googleCourseWorkStatus || googleCoursesStatus}</p>
+            )}
+
+            <div className="submission-list-box">
+              <div className="submission-list-head">
+                <strong>제출 학생 목록</strong>
+                <span>{googleStudentSubmissions.length}개</span>
+              </div>
+              <div className="submission-list">
+                {googleStudentSubmissions.map((submission) => (
+                  <button
+                    className={selectedGoogleSubmissionId === submission.id ? 'selected' : ''}
+                    key={submission.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedGoogleSubmissionId(submission.id);
+                      setGoogleSubmissionImages([]);
+                      setGoogleSubmissionImagesStatus('');
+                      setManualGoogleStudentId('');
+                    }}
+                  >
+                    <strong>{submission.studentName}</strong>
+                    <span>{formatSubmissionState(submission.state)}</span>
+                    {submission.studentEmail && <em>{submission.studentEmail}</em>}
+                    <small>{formatDateTime(submission.updateTime || submission.creationTime)}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">선택 학생</p>
+                <h2>{googleAiTargetStudent ? `${googleAiTargetStudent.name} 제출 이미지` : '학생 선택 필요'}</h2>
+              </div>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={connectSelectedSubmissionToAi}
+                disabled={!selectedGoogleSubmission || googleSubmissionImagesLoading}
+              >
+                이미지 연결
+              </button>
+            </div>
+
+            {selectedGoogleSubmission && (
+              <div className="selected-course-card">
+                <strong>{selectedGoogleSubmission.studentName}</strong>
+                {selectedGoogleSubmission.studentEmail && <span>{selectedGoogleSubmission.studentEmail}</span>}
+                <span>제출 시간: {formatDateTime(selectedGoogleSubmission.updateTime || selectedGoogleSubmission.creationTime)}</span>
+                {!autoMatchedGoogleStudent && (
+                  <label className="field">
+                    <span>수동 학생 선택</span>
+                    <select
+                      value={manualGoogleStudentId}
+                      onChange={(event) => setManualGoogleStudentId(event.target.value)}
+                    >
+                      <option value="">학생을 선택해 주세요</option>
+                      {studentList.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.className}반 {item.number}번 {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <button
+                  className="secondary-button inline-action-button"
+                  type="button"
+                  onClick={loadSelectedSubmissionImages}
+                  disabled={googleSubmissionImagesLoading}
+                >
+                  {googleSubmissionImagesLoading ? '이미지 가져오는 중' : '첨부 이미지 가져오기'}
+                </button>
+              </div>
+            )}
+
+            {uploadedImages.length > 0 && (
+              <>
+                <p className="selected-image-count">선택된 이미지: {selectedUploadedImages.length}장</p>
+                <div className="image-preview-grid">
+                  {uploadedImages.map((image) => (
+                    <figure
+                      className={`image-preview-card ${selectedUploadedImageIds.includes(image.id) ? 'selected' : ''}`}
+                      key={image.id}
+                      onClick={() => toggleUploadedImageSelection(image)}
+                    >
+                      <img src={image.dataUrl} alt={image.name} />
+                      <figcaption>
+                        <span>{image.name}</span>
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </>
+            )}
+            {googleSubmissionImagesStatus && <p className="pdf-status">{googleSubmissionImagesStatus}</p>}
+          </div>
+        </section>
+      )}
+
+      {activeTab === '메모/내보내기' && (
+        <section className="two-column">
+          <StudentListPanel
+            completedCount={completedCount}
+            hideCompleted={hideCompleted}
+            studentImageMap={studentImageMap}
+            resultMap={resultMap}
+            selectedKey={currentStudentKey}
+            showUngradedOnly={showUngradedOnly}
+            studentList={visibleStudentList}
+            totalCount={studentList.length}
+            onHideCompletedChange={setHideCompleted}
+            onRemove={removeStudent}
+            onSelect={(targetStudent) => selectStudent(targetStudent, '메모/내보내기')}
+            onShowUngradedOnlyChange={setShowUngradedOnly}
+          />
+
+          <div className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">교사용 메모</p>
+                <h2>{student.name ? `${student.className}반 ${student.number}번 ${student.name}` : '학생을 선택해 주세요'}</h2>
+              </div>
+            </div>
+
+            <label className="field">
+              <span>채점 근거 메모</span>
+              <textarea
+                className="work-textarea"
+                value={currentTeacherEvidenceMemo}
+                onChange={(event) =>
+                  setTeacherMemoByStudent((current) => ({
+                    ...current,
+                    [currentMemoKey]: event.target.value,
+                  }))
+                }
+                placeholder="예: 자료 출처 부족, 문화적 배경 설명 약함, 악기 설명은 좋음"
+                disabled={!student.name}
+              />
+            </label>
+
+            {selectedUploadedImages.length > 0 && (
+              <div className="selected-image-preview-box">
+                <div className="submission-list-head">
+                  <strong>선택 학생 제출 이미지</strong>
+                  <span>{selectedUploadedImages.length}장</span>
+                </div>
+                <div className="selected-image-preview-grid">
+                  {selectedUploadedImages.map((image) => (
+                    <figure className="image-preview-card selected" key={image.id}>
+                      <img src={image.dataUrl} alt={image.name} />
+                      <figcaption>
+                        <span>{image.name}</span>
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="action-row">
+              <button className="secondary-button" type="button" onClick={() => createStudentSubmissionPdf()}>
+                선택 학생 PDF
+              </button>
+              <button className="secondary-button" type="button" onClick={createClassSubmissionPdf}>
+                현재 반 전체 PDF
+              </button>
+              <button className="primary-button" type="button" onClick={downloadTeacherMemoCsv}>
+                메모 CSV 다운로드
+              </button>
+            </div>
+            {exportStatus && <p className="pdf-status">{exportStatus}</p>}
+          </div>
         </section>
       )}
 
@@ -3111,37 +3543,9 @@ function App() {
         <section className="panel settings-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">OpenAI 설정</p>
-              <h2>API Key 설정</h2>
+              <p className="eyebrow">설정</p>
+              <h2>Google Classroom 연결</h2>
             </div>
-          </div>
-
-          <label className="field">
-            <span>OpenAI API Key</span>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder="sk-..."
-              autoComplete="off"
-            />
-          </label>
-
-          <label className="field">
-            <span>모델</span>
-            <input
-              value={apiModel}
-              onChange={(event) => setApiModel(event.target.value)}
-              placeholder="gpt-4o-mini"
-            />
-          </label>
-
-          <div className="ai-help">
-            <strong>저장 방식</strong>
-            <p>
-              API Key는 이 브라우저의 localStorage에만 저장됩니다. 공용 기기에서는 사용 후 브라우저 저장 데이터를
-              삭제하는 것이 좋습니다.
-            </p>
           </div>
 
           <div className="settings-section">
