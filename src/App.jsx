@@ -208,6 +208,13 @@ function normalizeStudentPart(value) {
   return withoutLeadingZeros || text;
 }
 
+function normalizeClassName(value) {
+  const text = String(value ?? '').trim();
+  const match = text.match(/\d+/);
+  if (!match) return text;
+  return normalizeStudentPart(match[0]);
+}
+
 function normalizeMatchText(value) {
   return String(value ?? '').trim().replace(/\s+/g, '').toLowerCase();
 }
@@ -222,17 +229,17 @@ function slugify(value) {
 }
 
 function makeClassContextKey(grade, className, assessmentTitle) {
-  return `students_${normalizeStudentPart(grade)}_${normalizeStudentPart(className)}_${slugify(assessmentTitle)}`;
+  return `students_${normalizeStudentPart(grade)}_${normalizeClassName(className)}_${slugify(assessmentTitle)}`;
 }
 
 function makeRosterClassKey(grade, className) {
-  return `roster_${normalizeStudentPart(grade)}_${normalizeStudentPart(className)}`;
+  return `roster_${normalizeStudentPart(grade)}_${normalizeClassName(className)}`;
 }
 
 function normalizeClassContext(grade, className, assessmentTitle) {
   return {
     grade: normalizeStudentPart(grade),
-    className: normalizeStudentPart(className),
+    className: normalizeClassName(className),
     assessmentTitle: String(assessmentTitle ?? '').trim() || '음악 프로젝트 수행평가',
   };
 }
@@ -379,7 +386,7 @@ function rowsToStudents(rows, fallbackContext) {
   return bodyRows
     .map((row) => {
       const grade = String(row[gradeIndex] ?? fallbackContext.grade ?? '').trim();
-      const className = String(row[classIndex] ?? fallbackContext.className ?? '').trim();
+      const className = normalizeClassName(row[classIndex] ?? fallbackContext.className ?? '');
       const number = String(row[numberIndex] ?? '').trim();
       const name = String(row[nameIndex] ?? '').trim();
       const email = emailIndex >= 0 ? String(row[emailIndex] ?? '').trim() : '';
@@ -391,7 +398,7 @@ function rowsToStudents(rows, fallbackContext) {
 
       const key = [
         normalizeStudentPart(item.grade),
-        normalizeStudentPart(item.className),
+        normalizeClassName(item.className),
         normalizeStudentPart(item.number),
         normalizeMatchText(item.name),
       ].join('|');
@@ -399,6 +406,37 @@ function rowsToStudents(rows, fallbackContext) {
       seen.add(key);
       return true;
     });
+}
+
+function normalizeStoredStudents(students) {
+  return (students ?? []).map((item) => ({
+    ...item,
+    grade: normalizeStudentPart(item.grade ?? ''),
+    className: normalizeClassName(item.className ?? ''),
+    email: item.email ?? '',
+  }));
+}
+
+function normalizeContextStudentMap(map, fallbackAssessmentTitle) {
+  const normalized = {};
+  Object.values(map ?? {}).forEach((students) => {
+    normalizeStoredStudents(students).forEach((student) => {
+      const key = makeClassContextKey(student.grade || '1', student.className || '1', fallbackAssessmentTitle);
+      normalized[key] = [...(normalized[key] ?? []), student];
+    });
+  });
+  return normalized;
+}
+
+function normalizeRosterMap(map) {
+  const normalized = {};
+  Object.values(map ?? {}).forEach((students) => {
+    normalizeStoredStudents(students).forEach((student) => {
+      const key = makeRosterClassKey(student.grade || '1', student.className || '1');
+      normalized[key] = [...(normalized[key] ?? []), student];
+    });
+  });
+  return normalized;
 }
 
 function readFileAsDataUrl(file) {
@@ -506,19 +544,20 @@ function App() {
       savedContext.className,
       savedContext.assessmentTitle
     );
-    const migratedStudentLists = {
-      ...(saved.studentListsByContext ?? {}),
-    };
+    const migratedStudentLists = normalizeContextStudentMap(
+      saved.studentListsByContext ?? {},
+      savedContext.assessmentTitle
+    );
     const migratedResults = {
       ...(saved.resultsByContext ?? {}),
     };
     if (!migratedStudentLists[savedContextKey] && Array.isArray(saved.studentList) && saved.studentList.length > 0) {
-      migratedStudentLists[savedContextKey] = saved.studentList.map((item) => ({
+      migratedStudentLists[savedContextKey] = normalizeStoredStudents(saved.studentList.map((item) => ({
         ...item,
         grade: item.grade ?? savedContext.grade,
         className: item.className ?? savedContext.className,
         email: item.email ?? '',
-      }));
+      })));
     }
     if (!migratedResults[savedContextKey] && Array.isArray(saved.results) && saved.results.length > 0) {
       migratedResults[savedContextKey] = saved.results.map((item) => ({
@@ -532,11 +571,12 @@ function App() {
     setSelectedAssessmentTitle(savedContext.assessmentTitle);
     setStudentListsByContext(migratedStudentLists);
     setResultsByContext(migratedResults);
-    setMasterRosterByClass(saved.masterRosterByClass ?? {});
+    const migratedMasterRoster = normalizeRosterMap(saved.masterRosterByClass ?? {});
+    setMasterRosterByClass(migratedMasterRoster);
     loadedContextKeyRef.current = savedContextKey;
     setStudentList(
       migratedStudentLists[savedContextKey] ??
-        saved.masterRosterByClass?.[makeRosterClassKey(savedContext.grade, savedContext.className)] ??
+        migratedMasterRoster[makeRosterClassKey(savedContext.grade, savedContext.className)] ??
         []
     );
     setStudentBulkText(saved.studentBulkText ?? '1,1,김민서\n1,2,박지훈\n1,3,이서연');
@@ -706,6 +746,27 @@ function App() {
     return makeRosterClassKey(currentClassContext.grade, currentClassContext.className);
   }, [currentClassContext]);
   const currentMasterRoster = masterRosterByClass[currentRosterClassKey] ?? [];
+  const availableClassOptions = useMemo(() => {
+    const classes = new Set();
+    Object.values(masterRosterByClass).forEach((students) => {
+      (students ?? []).forEach((item) => {
+        if (normalizeStudentPart(item.grade) === currentClassContext.grade) {
+          const className = normalizeClassName(item.className);
+          if (className) classes.add(className);
+        }
+      });
+    });
+    Object.values(studentListsByContext).forEach((students) => {
+      (students ?? []).forEach((item) => {
+        if (normalizeStudentPart(item.grade) === currentClassContext.grade) {
+          const className = normalizeClassName(item.className);
+          if (className) classes.add(className);
+        }
+      });
+    });
+    if (currentClassContext.className) classes.add(currentClassContext.className);
+    return [...classes].sort((a, b) => Number(a) - Number(b));
+  }, [currentClassContext, masterRosterByClass, studentListsByContext]);
 
   const currentStudentKey = studentKey(student);
   const currentNormalizedStudentKey = normalizedStudentKey(student);
@@ -757,7 +818,7 @@ function App() {
           submissionName &&
           studentName &&
           submissionName === studentName &&
-          normalizeStudentPart(item.className) === currentClassContext.className
+          normalizeClassName(item.className) === currentClassContext.className
         ) {
           return true;
         }
@@ -765,7 +826,7 @@ function App() {
           submissionEmailName &&
           studentName &&
           submissionEmailName === studentName &&
-          normalizeStudentPart(item.className) === currentClassContext.className
+          normalizeClassName(item.className) === currentClassContext.className
         ) {
           return true;
         }
@@ -965,7 +1026,7 @@ function App() {
     const imported = parseStudentLines(studentBulkText).map((item) => ({
       ...item,
       grade: item.grade || currentClassContext.grade,
-      className: item.className || currentClassContext.className,
+      className: normalizeClassName(item.className || currentClassContext.className),
       email: item.email ?? '',
     }));
     if (imported.length === 0) {
@@ -993,7 +1054,7 @@ function App() {
       const normalizedStudent = {
         ...item,
         grade: context.grade,
-        className: context.className,
+        className: normalizeClassName(context.className),
         email: item.email ?? '',
       };
       grouped.set(key, [...(grouped.get(key) ?? []), normalizedStudent]);
@@ -1034,7 +1095,7 @@ function App() {
     const grouped = new Map();
     students.forEach((item) => {
       const grade = normalizeStudentPart(item.grade || currentClassContext.grade);
-      const className = normalizeStudentPart(item.className || currentClassContext.className);
+      const className = normalizeClassName(item.className || currentClassContext.className);
       const key = makeRosterClassKey(grade, className);
       grouped.set(key, [
         ...(grouped.get(key) ?? []),
@@ -2329,13 +2390,13 @@ function App() {
                   <input
                     list="class-options"
                     value={selectedClassName}
-                    onChange={(event) => setSelectedClassName(event.target.value)}
+                    onChange={(event) => setSelectedClassName(normalizeClassName(event.target.value))}
                     placeholder="7"
                   />
                   <datalist id="class-options">
-                    {Array.from({ length: 10 }, (_, index) => (
-                      <option key={index + 1} value={String(index + 1)}>
-                        {index + 1}반
+                    {availableClassOptions.map((className) => (
+                      <option key={className} value={className}>
+                        {className}반
                       </option>
                     ))}
                   </datalist>
