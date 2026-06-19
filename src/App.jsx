@@ -122,6 +122,14 @@ function isSupportedImageFile(file) {
   );
 }
 
+function getAttachmentType(attachment) {
+  if (attachment?.driveFile) return 'driveFile';
+  if (attachment?.link) return 'link';
+  if (attachment?.youTubeVideo) return 'youTubeVideo';
+  if (attachment?.form) return 'form';
+  return 'unknown';
+}
+
 function readBlobAsDataUrl(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2015,19 +2023,15 @@ function App() {
     }
 
     const attachments = selectedGoogleSubmission.raw?.assignmentSubmission?.attachments ?? [];
-    const driveFiles = attachments
-      .map((attachment) => attachment.driveFile)
-      .filter((driveFile) => driveFile?.id)
-      .map((driveFile) => ({
-        fileId: driveFile.id,
-        title: driveFile.title ?? '',
-        alternateLink: driveFile.alternateLink ?? '',
-        thumbnailUrl: driveFile.thumbnailUrl ?? '',
-      }));
+    console.group('[DEBUG] Google Classroom attachment scan');
+    console.log('submission id', selectedGoogleSubmission.id);
 
-    if (driveFiles.length === 0) {
+    if (attachments.length === 0) {
+      console.log('included=false');
+      console.log('reason=no attachments');
+      console.groupEnd();
       setGoogleSubmissionImages([]);
-      setGoogleSubmissionImagesStatus('선택한 제출물에 Drive 첨부파일이 없습니다.');
+      setGoogleSubmissionImagesStatus('선택한 제출물에 첨부파일이 없습니다.');
       return [];
     }
 
@@ -2037,9 +2041,34 @@ function App() {
     try {
       const images = [];
 
-      for (const driveFile of driveFiles) {
+      for (const attachment of attachments) {
+        const attachmentType = getAttachmentType(attachment);
+        const driveFile = attachment.driveFile;
+        const debugBase = {
+          submissionId: selectedGoogleSubmission.id,
+          attachmentType,
+          attachmentTitle:
+            driveFile?.title ??
+            attachment.link?.title ??
+            attachment.form?.title ??
+            attachment.youTubeVideo?.title ??
+            '',
+          driveFileId: driveFile?.id ?? '',
+          driveFileTitle: driveFile?.title ?? '',
+        };
+
+        if (!driveFile?.id) {
+          console.log('[DEBUG]', {
+            ...debugBase,
+            mimeType: '',
+            included: false,
+            reason: attachmentType === 'driveFile' ? 'missing driveFile.id' : 'not a driveFile attachment',
+          });
+          continue;
+        }
+
         const metadataResponse = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${driveFile.fileId}?fields=id,name,mimeType,thumbnailLink,webViewLink,webContentLink&supportsAllDrives=true`,
+          `https://www.googleapis.com/drive/v3/files/${driveFile.id}?fields=id,name,mimeType,thumbnailLink,webViewLink,webContentLink&supportsAllDrives=true`,
           {
             headers: {
               Authorization: `Bearer ${googleAccessToken}`,
@@ -2051,10 +2080,26 @@ function App() {
         if (!metadataResponse.ok) {
           throw new Error(metadata.error?.message ?? 'Drive 파일 정보를 불러오지 못했습니다.');
         }
-        if (!isSupportedImageFile(metadata)) continue;
+        if (!isSupportedImageFile(metadata)) {
+          console.log('[DEBUG]', {
+            ...debugBase,
+            mimeType: metadata.mimeType ?? '',
+            title: metadata.name ?? debugBase.attachmentTitle,
+            included: false,
+            reason: metadata.mimeType ? 'unsupported mime type' : 'missing mime type and unsupported extension',
+          });
+          continue;
+        }
+
+        console.log('[DEBUG]', {
+          ...debugBase,
+          title: metadata.name ?? debugBase.attachmentTitle,
+          mimeType: metadata.mimeType ?? '',
+          included: true,
+        });
 
         const mediaResponse = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${driveFile.fileId}?alt=media&supportsAllDrives=true`,
+          `https://www.googleapis.com/drive/v3/files/${driveFile.id}?alt=media&supportsAllDrives=true`,
           {
             headers: {
               Authorization: `Bearer ${googleAccessToken}`,
@@ -2071,7 +2116,7 @@ function App() {
         const dataUrl = await readBlobAsDataUrl(blob);
         images.push({
           id: makeId(),
-          fileId: driveFile.fileId,
+          fileId: driveFile.id,
           name: metadata.name ?? driveFile.title ?? 'Google Classroom 첨부 이미지',
           type: metadata.mimeType || blob.type || 'image/jpeg',
           dataUrl,
@@ -2083,6 +2128,7 @@ function App() {
           thumbnailLink: metadata.thumbnailLink ?? driveFile.thumbnailUrl,
         });
       }
+      console.groupEnd();
 
       setGoogleSubmissionImages(images);
       setUploadedImages(images);
@@ -2101,6 +2147,8 @@ function App() {
       );
       return images;
     } catch (error) {
+      console.error('[DEBUG] attachment image import failed', error);
+      console.groupEnd();
       setGoogleSubmissionImagesStatus(error.message || '첨부 이미지를 가져오는 중 오류가 발생했습니다.');
       return [];
     } finally {
