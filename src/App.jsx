@@ -2,12 +2,12 @@
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { jsPDF } from 'jspdf';
 
 const STORAGE_KEY = 'music-assessment-helper-state';
 const tabs = ['학생 목록', 'Classroom 제출물', '메모/내보내기', '설정'];
 const GOOGLE_IDENTITY_SCRIPT_URL = 'https://accounts.google.com/gsi/client';
 const SHEETJS_SCRIPT_URL = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
-const JSPDF_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';
 const assessmentPresets = ['세계 민요 총괄평가', '음악 프로젝트 수행평가', '작곡 수행평가'];
 const classOptions = Array.from({ length: 8 }, (_, index) => String(index + 1));
 const GOOGLE_CLASSROOM_LOGIN_SCOPE = [
@@ -251,29 +251,6 @@ function loadSheetJsScript() {
     script.async = true;
     script.onload = () => resolve(window.XLSX);
     script.onerror = reject;
-    document.head.appendChild(script);
-  });
-}
-
-function loadJsPdfScript() {
-  return new Promise((resolve, reject) => {
-    if (window.jspdf?.jsPDF) {
-      resolve(window.jspdf.jsPDF);
-      return;
-    }
-
-    const existingScript = document.querySelector(`script[src="${JSPDF_SCRIPT_URL}"]`);
-    if (existingScript) {
-      existingScript.addEventListener('load', () => resolve(window.jspdf.jsPDF), { once: true });
-      existingScript.addEventListener('error', reject, { once: true });
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.src = JSPDF_SCRIPT_URL;
-    script.async = true;
-    script.onload = () => resolve(window.jspdf.jsPDF);
-    script.onerror = () => reject(new Error('PDF 생성 라이브러리를 불러오지 못했습니다.'));
     document.head.appendChild(script);
   });
 }
@@ -2497,7 +2474,6 @@ function App() {
 
     try {
       setExportStatus('학생 제출물 PDF를 만드는 중입니다.');
-      const jsPDF = await loadJsPdfScript();
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const submittedAt = formatDateTime(selectedGoogleSubmission?.updateTime || selectedGoogleSubmission?.creationTime);
 
@@ -2524,14 +2500,15 @@ function App() {
       setExportStatus(`${fileName} 파일을 만들었습니다.`);
     } catch (error) {
       console.error('[PDF Export] Student PDF failed', error);
-      setExportStatus(error.message || '학생 제출물 PDF 생성 중 오류가 발생했습니다.');
+      const message = error.message || '학생 제출물 PDF 생성 중 오류가 발생했습니다.';
+      setExportStatus(message);
+      alert(message);
     }
   };
 
   const createClassSubmissionPdf = async () => {
     try {
       setExportStatus('현재 반 전체 제출물 PDF를 만드는 중입니다.');
-      const jsPDF = await loadJsPdfScript();
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const orderedStudents = [...studentList].sort((a, b) => Number(a.number) - Number(b.number));
       let hasAnyFile = false;
@@ -2567,7 +2544,9 @@ function App() {
       setExportStatus(`${fileName} 파일을 만들었습니다.`);
     } catch (error) {
       console.error('[PDF Export] Class PDF failed', error);
-      setExportStatus(error.message || '반 전체 제출물 PDF 생성 중 오류가 발생했습니다.');
+      const message = error.message || '반 전체 제출물 PDF 생성 중 오류가 발생했습니다.';
+      setExportStatus(message);
+      alert(message);
     }
   };
 
