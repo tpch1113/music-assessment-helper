@@ -2463,12 +2463,19 @@ function App() {
     targetStudent = student,
     images = selectedUploadedImages
   ) => {
-    if (!targetStudent?.name) {
-      setExportStatus('PDF로 내보낼 학생을 선택해 주세요.');
+    console.log('PDF EXPORT START');
+    console.log('selectedStudent', targetStudent);
+    console.log('selectedSubmission', selectedGoogleSubmission);
+    console.log('selectedImages.length', images.length);
+
+    if (!targetStudent?.name && !selectedGoogleSubmission) {
+      alert('제출 학생을 먼저 선택하세요');
+      setExportStatus('PDF로 내보낼 Classroom 제출 학생을 선택해 주세요.');
       return;
     }
-    if (images.length === 0) {
-      setExportStatus('PDF로 내보낼 제출 이미지가 없습니다. PDF 첨부파일은 현재 목록 표시와 Drive 열기만 지원합니다.');
+    if (images.length === 0 && googleSubmissionPdfs.length === 0) {
+      alert('선택된 이미지가 없습니다');
+      setExportStatus('PDF로 내보낼 이미지 또는 PDF 첨부파일이 없습니다.');
       return;
     }
 
@@ -2476,6 +2483,12 @@ function App() {
       setExportStatus('학생 제출물 PDF를 만드는 중입니다.');
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const submittedAt = formatDateTime(selectedGoogleSubmission?.updateTime || selectedGoogleSubmission?.creationTime);
+      const displayName = targetStudent?.name || selectedGoogleSubmission?.studentName || '이름 없음';
+      const displayEmail = targetStudent?.email || selectedGoogleSubmission?.studentEmail || '';
+      const displayClass = targetStudent?.className ? `${targetStudent.className}반` : '미등록';
+      const displayNumber = targetStudent?.number ? `${targetStudent.number}번` : '미등록';
+      const courseName = selectedGoogleCourse?.name || '';
+      const courseWorkTitle = selectedGoogleCourseWork?.title || currentClassContext.assessmentTitle;
 
       pdf.setFont('helvetica', 'bold');
       pdf.setFontSize(18);
@@ -2484,19 +2497,40 @@ function App() {
       pdf.setFontSize(12);
       [
         `학년: ${currentClassContext.grade}학년`,
-        `반: ${targetStudent.className}반`,
-        `번호: ${targetStudent.number}번`,
-        `이름: ${targetStudent.name}`,
-        `수행평가명: ${currentClassContext.assessmentTitle}`,
+        `반: ${displayClass}`,
+        `번호: ${displayNumber}`,
+        `이름: ${displayName}`,
+        `이메일: ${displayEmail || '미등록'}`,
+        `수업명: ${courseName || '미등록'}`,
+        `과제명: ${courseWorkTitle}`,
         `제출 시간: ${submittedAt}`,
       ].forEach((line, index) => pdf.text(line, 20, 48 + index * 9));
 
       images.forEach((image) => addImagePageToPdf(pdf, image));
 
-      const fileName = `${currentClassContext.grade}학년_${targetStudent.className}반_${targetStudent.number}번_${safeFileName(
-        targetStudent.name
-      )}_${safeFileName(currentClassContext.assessmentTitle)}.pdf`;
+      if (images.length === 0 && googleSubmissionPdfs.length > 0) {
+        pdf.addPage();
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(16);
+        pdf.text('PDF 첨부파일', 20, 28);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(11);
+        googleSubmissionPdfs.forEach((pdfFile, index) => {
+          const y = 48 + index * 24;
+          pdf.text(`파일명: ${pdfFile.name}`, 20, y);
+          pdf.text(`Drive 링크: ${getDriveViewUrl(pdfFile)}`, 20, y + 8);
+          pdf.text(`driveFileId: ${pdfFile.fileId}`, 20, y + 16);
+        });
+      }
+
+      const fileName = targetStudent?.number
+        ? `${currentClassContext.grade}학년_${targetStudent.className}반_${targetStudent.number}번_${safeFileName(
+            displayName
+          )}_${safeFileName(courseWorkTitle)}.pdf`
+        : `${safeFileName(displayName)}_${safeFileName(courseWorkTitle)}.pdf`;
+      console.log('PDF SAVE');
       pdf.save(fileName);
+      console.log('PDF EXPORT COMPLETE');
       setExportStatus(`${fileName} 파일을 만들었습니다.`);
     } catch (error) {
       console.error('[PDF Export] Student PDF failed', error);
@@ -3169,7 +3203,17 @@ function App() {
             )}
 
             <div className="action-row">
-              <button className="secondary-button" type="button" onClick={() => createStudentSubmissionPdf()}>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  console.log('PDF EXPORT BUTTON CLICKED');
+                  console.log('selectedStudent', student);
+                  console.log('selectedSubmission', selectedGoogleSubmission);
+                  console.log('selectedImages.length', selectedUploadedImages.length);
+                  createStudentSubmissionPdf();
+                }}
+              >
                 선택 학생 PDF
               </button>
               <button className="secondary-button" type="button" onClick={createClassSubmissionPdf}>
