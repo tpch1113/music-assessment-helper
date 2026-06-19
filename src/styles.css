@@ -987,7 +987,11 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
-.pdf-attachment-card button {
+.pdf-attachment-card button,
+.pdf-attachment-card a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 34px;
   border: 0;
   border-radius: 6px;
@@ -995,6 +999,7 @@ textarea:focus {
   color: #284151;
   font-weight: 900;
   padding: 0 12px;
+  text-decoration: none;
 }
 
 .debug-json-box {
