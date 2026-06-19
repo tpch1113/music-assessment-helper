@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
@@ -49,6 +50,35 @@ function createCriterion(title = '') {
     title,
     levels: createLevels(),
   };
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('[App ErrorBoundary]', error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <main className="app-shell">
+          <div className="error-box">
+            앱 화면을 표시하는 중 오류가 발생했습니다: {this.state.error.message}
+          </div>
+        </main>
+      );
+    }
+
+    return this.props.children;
+  }
 }
 
 const defaultRubric = {
@@ -150,6 +180,10 @@ function downloadDataUrl(dataUrl, fileName) {
   link.href = dataUrl;
   link.download = fileName;
   link.click();
+}
+
+function getDriveViewUrl(file) {
+  return file?.webViewLink || file?.alternateLink || `https://drive.google.com/file/d/${file.fileId}/view`;
 }
 
 function clampRecommendation(score, levels) {
@@ -2132,6 +2166,24 @@ function App() {
           fileKind: supportedPdf ? 'pdf' : 'image',
         });
 
+        if (supportedPdf) {
+          pdfs.push({
+            id: makeId(),
+            fileId: driveFile.id,
+            name: metadata.name ?? driveFile.title ?? 'Google Classroom PDF 첨부파일',
+            type: metadata.mimeType || 'application/pdf',
+            dataUrl: '',
+            source: 'google-classroom',
+            submissionId: selectedGoogleSubmission.id,
+            studentName: selectedGoogleSubmission.studentName,
+            studentEmail: selectedGoogleSubmission.studentEmail,
+            webViewLink: metadata.webViewLink ?? driveFile.alternateLink,
+            alternateLink: driveFile.alternateLink ?? '',
+            thumbnailLink: metadata.thumbnailLink ?? driveFile.thumbnailUrl,
+          });
+          continue;
+        }
+
         let blob = null;
         let dataUrl = '';
         try {
@@ -2174,11 +2226,7 @@ function App() {
           thumbnailLink: metadata.thumbnailLink ?? driveFile.thumbnailUrl,
         };
 
-        if (supportedPdf) {
-          pdfs.push(fileEntry);
-        } else {
-          images.push(fileEntry);
-        }
+        images.push(fileEntry);
       }
       console.groupEnd();
 
@@ -2516,7 +2564,7 @@ function App() {
       return;
     }
     if (images.length === 0) {
-      setExportStatus('PDF로 내보낼 제출 이미지가 없습니다. PDF 첨부파일은 현재 목록 표시와 원본 다운로드만 지원합니다.');
+      setExportStatus('PDF로 내보낼 제출 이미지가 없습니다. PDF 첨부파일은 현재 목록 표시와 Drive 열기만 지원합니다.');
       return;
     }
 
@@ -2581,7 +2629,7 @@ function App() {
       });
 
       if (!hasAnyFile) {
-        setExportStatus('현재 반에 PDF로 내보낼 제출 이미지가 없습니다. PDF 첨부파일은 현재 목록 표시와 원본 다운로드만 지원합니다.');
+        setExportStatus('현재 반에 PDF로 내보낼 제출 이미지가 없습니다. PDF 첨부파일은 현재 목록 표시와 Drive 열기만 지원합니다.');
         return;
       }
 
@@ -3108,7 +3156,7 @@ function App() {
                   <strong>PDF 첨부파일 목록</strong>
                   <span>{googleSubmissionPdfs.length}개</span>
                 </div>
-                <p className="bulk-hint">PDF 첨부파일은 현재 원본 목록 표시와 다운로드만 지원합니다.</p>
+                <p className="bulk-hint">PDF 첨부파일은 앱에서 읽지 않고 Drive에서만 엽니다.</p>
                 <div className="pdf-attachment-list">
                   {googleSubmissionPdfs.map((pdfFile) => (
                     <article className="pdf-attachment-card" key={pdfFile.id}>
@@ -3117,15 +3165,9 @@ function App() {
                         <span>fileId: {pdfFile.fileId}</span>
                         <span>mimeType: {pdfFile.type || 'application/pdf'}</span>
                       </div>
-                      {pdfFile.dataUrl ? (
-                        <button type="button" onClick={() => downloadDataUrl(pdfFile.dataUrl, pdfFile.name)}>
-                          다운로드
-                        </button>
-                      ) : pdfFile.webViewLink ? (
-                        <a href={pdfFile.webViewLink} target="_blank" rel="noreferrer">
-                          Drive 열기
-                        </a>
-                      ) : null}
+                      <a href={getDriveViewUrl(pdfFile)} target="_blank" rel="noreferrer">
+                        Drive 열기
+                      </a>
                     </article>
                   ))}
                 </div>
@@ -3202,7 +3244,7 @@ function App() {
                   <strong>선택 학생 PDF 첨부파일</strong>
                   <span>{googleSubmissionPdfs.length}개</span>
                 </div>
-                <p className="bulk-hint">PDF 첨부파일은 현재 원본 목록 표시와 다운로드만 지원합니다.</p>
+                <p className="bulk-hint">PDF 첨부파일은 앱에서 읽지 않고 Drive에서만 엽니다.</p>
                 <div className="pdf-attachment-list">
                   {googleSubmissionPdfs.map((pdfFile) => (
                     <article className="pdf-attachment-card" key={pdfFile.id}>
@@ -3211,15 +3253,9 @@ function App() {
                         <span>fileId: {pdfFile.fileId}</span>
                         <span>mimeType: {pdfFile.type || 'application/pdf'}</span>
                       </div>
-                      {pdfFile.dataUrl ? (
-                        <button type="button" onClick={() => downloadDataUrl(pdfFile.dataUrl, pdfFile.name)}>
-                          다운로드
-                        </button>
-                      ) : pdfFile.webViewLink ? (
-                        <a href={pdfFile.webViewLink} target="_blank" rel="noreferrer">
-                          Drive 열기
-                        </a>
-                      ) : null}
+                      <a href={getDriveViewUrl(pdfFile)} target="_blank" rel="noreferrer">
+                        Drive 열기
+                      </a>
                     </article>
                   ))}
                 </div>
@@ -4002,7 +4038,7 @@ function App() {
                   <strong>PDF 첨부파일 목록</strong>
                   <span>{googleSubmissionPdfs.length}개</span>
                 </div>
-                <p className="bulk-hint">PDF 첨부파일은 현재 원본 목록 표시와 다운로드만 지원합니다.</p>
+                <p className="bulk-hint">PDF 첨부파일은 앱에서 읽지 않고 Drive에서만 엽니다.</p>
                 <div className="pdf-attachment-list">
                   {googleSubmissionPdfs.map((pdfFile) => (
                     <article className="pdf-attachment-card" key={pdfFile.id}>
@@ -4011,15 +4047,9 @@ function App() {
                         <span>fileId: {pdfFile.fileId}</span>
                         <span>mimeType: {pdfFile.type || 'application/pdf'}</span>
                       </div>
-                      {pdfFile.dataUrl ? (
-                        <button type="button" onClick={() => downloadDataUrl(pdfFile.dataUrl, pdfFile.name)}>
-                          다운로드
-                        </button>
-                      ) : pdfFile.webViewLink ? (
-                        <a href={pdfFile.webViewLink} target="_blank" rel="noreferrer">
-                          Drive 열기
-                        </a>
-                      ) : null}
+                      <a href={getDriveViewUrl(pdfFile)} target="_blank" rel="noreferrer">
+                        Drive 열기
+                      </a>
                     </article>
                   ))}
                 </div>
@@ -4153,5 +4183,13 @@ function StudentListPanel({
   );
 }
 
-export default App;
+function AppWithErrorBoundary() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  );
+}
+
+export default AppWithErrorBoundary;
 
