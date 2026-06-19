@@ -694,110 +694,45 @@ function App() {
     setApiKey(saved.apiKey ?? '');
     setApiModel(saved.apiModel ?? 'gpt-4o-mini');
     setGoogleClientId(saved.googleClientId ?? '');
-    setGoogleCourses(saved.googleCourses ?? []);
-    setSelectedGoogleCourseId(saved.selectedGoogleCourseId ?? '');
-    setGoogleCourseWork(saved.googleCourseWork ?? []);
-    setSelectedGoogleCourseWorkId(saved.selectedGoogleCourseWorkId ?? '');
-    setGoogleStudentSubmissions(saved.googleStudentSubmissions ?? []);
-    setSelectedGoogleSubmissionId(saved.selectedGoogleSubmissionId ?? '');
-    setGoogleSubmissionImages(saved.googleSubmissionImages ?? []);
-    setGoogleSubmissionPdfs(saved.googleSubmissionPdfs ?? []);
-    setStudentWorkText(saved.studentWorkText ?? '');
-    setEvaluationRubricText(saved.evaluationRubricText ?? '');
-    setStudentImageMap(saved.studentImageMap ?? {});
-    setStudentPdfMap(saved.studentPdfMap ?? {});
-    setUnmatchedImageFiles(saved.unmatchedImageFiles ?? []);
-    setSelectedUploadedImageIds(saved.selectedUploadedImageIds ?? []);
-    setAiSuggestions(saved.aiSuggestions ?? []);
-    setAiFeedbackDraft(saved.aiFeedbackDraft ?? '');
-    setAiSummary(saved.aiSummary ?? '');
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        activeTab,
-        selectedGrade,
-        selectedClassName,
-        selectedAssessmentTitle,
-        studentListsByContext,
-        resultsByContext,
-        masterRosterByClass,
-        teacherMemoByStudent,
-        rubric,
-        savedRubrics,
-        selectedRubricId,
-        studentList,
-        studentBulkText,
-        student,
-        scores,
-        teacherMemo,
-        results,
-        showUngradedOnly,
-        hideCompleted,
-        apiKey,
-        apiModel,
-        googleClientId,
-        googleCourses,
-        selectedGoogleCourseId,
-        googleCourseWork,
-        selectedGoogleCourseWorkId,
-        googleStudentSubmissions,
-        selectedGoogleSubmissionId,
-        googleSubmissionImages,
-        googleSubmissionPdfs,
-        studentWorkText,
-        evaluationRubricText,
-        studentImageMap,
-        studentPdfMap,
-        unmatchedImageFiles,
-        selectedUploadedImageIds,
-        aiSuggestions,
-        aiFeedbackDraft,
-        aiSummary,
-      })
-    );
+    try {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          activeTab,
+          selectedGrade,
+          selectedClassName,
+          selectedAssessmentTitle,
+          studentListsByContext,
+          masterRosterByClass,
+          teacherMemoByStudent,
+          studentList,
+          studentBulkText,
+          student,
+          showUngradedOnly,
+          hideCompleted,
+          googleClientId,
+        })
+      );
+    } catch (error) {
+      console.error('[Storage] Failed to save app state', error);
+    }
   }, [
     activeTab,
     selectedGrade,
     selectedClassName,
     selectedAssessmentTitle,
     studentListsByContext,
-    resultsByContext,
     masterRosterByClass,
     teacherMemoByStudent,
-    rubric,
-    savedRubrics,
-    selectedRubricId,
     studentList,
     studentBulkText,
     student,
-    scores,
-    teacherMemo,
-    results,
     showUngradedOnly,
     hideCompleted,
-    apiKey,
-    apiModel,
     googleClientId,
-    googleCourses,
-    selectedGoogleCourseId,
-    googleCourseWork,
-    selectedGoogleCourseWorkId,
-    googleStudentSubmissions,
-    selectedGoogleSubmissionId,
-    googleSubmissionImages,
-    googleSubmissionPdfs,
-    studentWorkText,
-    evaluationRubricText,
-    studentImageMap,
-    studentPdfMap,
-    unmatchedImageFiles,
-    selectedUploadedImageIds,
-    aiSuggestions,
-    aiFeedbackDraft,
-    aiSummary,
   ]);
 
   const maxScore = useMemo(() => {
@@ -1798,37 +1733,29 @@ function App() {
     const confirmed = window.confirm('모든 학생 명단과 채점 결과가 삭제됩니다. 계속하시겠습니까?');
     if (!confirmed) return;
 
-    const saved = safeParse(localStorage.getItem(STORAGE_KEY), {});
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        ...saved,
-        masterRosterByClass: {},
-        studentListsByContext: {},
-        resultsByContext: {},
-        studentList: [],
-        results: [],
-        student: emptyStudent,
-        scores: {},
-        teacherMemo: '',
-        googleCourses: [],
-        googleCourseWork: [],
-        googleStudentSubmissions: [],
-        googleSubmissionImages: [],
-        googleSubmissionPdfs: [],
-        selectedGoogleCourseId: '',
-        selectedGoogleCourseWorkId: '',
-        selectedGoogleSubmissionId: '',
-        studentImageMap: {},
-        studentPdfMap: {},
-        unmatchedImageFiles: [],
-        uploadedImages: [],
-        selectedUploadedImageIds: [],
-        aiSuggestions: [],
-        aiFeedbackDraft: '',
-        aiSummary: '',
-      })
-    );
+    try {
+      const saved = safeParse(localStorage.getItem(STORAGE_KEY), {});
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          activeTab: '학생 목록',
+          selectedGrade: saved.selectedGrade ?? '1',
+          selectedClassName: saved.selectedClassName ?? '1',
+          selectedAssessmentTitle: saved.selectedAssessmentTitle ?? '세계 민요 총괄평가',
+          studentListsByContext: {},
+          masterRosterByClass: {},
+          teacherMemoByStudent: {},
+          studentList: [],
+          studentBulkText: '',
+          student: emptyStudent,
+          showUngradedOnly: false,
+          hideCompleted: false,
+          googleClientId: saved.googleClientId ?? '',
+        })
+      );
+    } catch (error) {
+      console.error('[Storage] Failed to reset app data', error);
+    }
     location.reload();
   };
 
